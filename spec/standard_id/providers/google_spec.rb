@@ -7,10 +7,8 @@ RSpec.describe StandardId::Providers::Google do
   let(:google_client_secret) { "google_secret" }
 
   before do
-    social_config = double("social_config")
-    allow(StandardId.config).to receive(:social).and_return(social_config)
-    allow(social_config).to receive(:google_client_id).and_return(google_client_id)
-    allow(social_config).to receive(:google_client_secret).and_return(google_client_secret)
+    allow(StandardId.config).to receive(:google_client_id).and_return(google_client_id)
+    allow(StandardId.config).to receive(:google_client_secret).and_return(google_client_secret)
   end
 
   describe "interface compliance" do
@@ -74,22 +72,43 @@ RSpec.describe StandardId::Providers::Google do
 
       expect(url).not_to include("prompt=")
     end
+
+    it "accepts multiple extra parameters" do
+      url = described_class.authorization_url(
+        state: state,
+        redirect_uri: redirect_uri,
+        login_hint: "user@example.com",
+        prompt: "consent",
+        access_type: "offline",
+        hd: "example.com",
+        response_mode: "form_post",
+        nonce: "random_nonce_value"
+      )
+
+      expect(url).to include("login_hint=user%40example.com")
+      expect(url).to include("prompt=consent")
+      expect(url).to include("access_type=offline")
+      expect(url).to include("hd=example.com")
+      expect(url).to include("response_mode=form_post")
+      expect(url).to include("nonce=random_nonce_value")
+    end
   end
 
   describe ".get_user_info" do
     context "with id_token" do
       let(:id_token) { "mobile_id_token" }
+      let(:nonce) { "random_nonce_value" }
       let(:user_info) { { "email" => "user@example.com", "name" => "Test User" } }
 
       it "verifies id_token directly" do
         expect(described_class).to receive(:verify_id_token)
-          .with(id_token: id_token)
+          .with(id_token:, nonce:)
           .and_return(user_info)
 
-        result = described_class.get_user_info(id_token: id_token)
+        result = described_class.get_user_info(id_token:, nonce:)
 
         expect(result[:user_info]).to eq(user_info)
-        expect(result[:tokens]).to eq({ id_token: id_token }.with_indifferent_access)
+        expect(result[:tokens]).to eq({ id_token: }.with_indifferent_access)
       end
     end
 
@@ -111,15 +130,16 @@ RSpec.describe StandardId::Providers::Google do
 
     context "with code" do
       let(:code) { "authorization_code_123" }
+      let(:nonce) { "random_nonce_value" }
       let(:redirect_uri) { "https://example.com/callback" }
       let(:user_info) { { "email" => "user@example.com", "name" => "Test User" } }
 
       it "exchanges code for user info" do
         expect(described_class).to receive(:exchange_code_for_user_info)
-          .with(code: code, redirect_uri: redirect_uri)
-          .and_return({ user_info: user_info, tokens: { access_token: "exchanged" } })
+          .with(code:, nonce:, redirect_uri: redirect_uri)
+          .and_return({ user_info:, tokens: { access_token: "exchanged" } })
 
-        result = described_class.get_user_info(code: code, redirect_uri: redirect_uri)
+        result = described_class.get_user_info(code:, redirect_uri:, nonce:)
 
         expect(result[:user_info]).to eq(user_info)
         expect(result[:tokens]).to include(:access_token)
