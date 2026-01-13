@@ -9,33 +9,38 @@ module StandardId
       USERINFO_ENDPOINT = "https://www.googleapis.com/oauth2/v2/userinfo".freeze
       TOKEN_INFO_ENDPOINT = "https://oauth2.googleapis.com/tokeninfo".freeze
       DEFAULT_SCOPE = "openid email profile".freeze
+      AUTHORIZATION_PARAM_DEFAULTS = {
+        scope: DEFAULT_SCOPE
+      }.freeze
 
       class << self
         def provider_name
           "google"
         end
 
-        def authorization_url(state:, redirect_uri:, **options)
-          scope = options[:scope] || DEFAULT_SCOPE
-          prompt = options[:prompt]
+        def supported_authorization_params
+          [:nonce, :login_hint, :prompt, :scope, :access_type, :hd, :response_mode, :include_granted_scopes]
+        end
 
+        def authorization_url(state:, redirect_uri:, **options)
           query = {
             client_id: credentials[:client_id],
             redirect_uri: redirect_uri,
             response_type: "code",
-            scope: scope,
             state: state
           }
 
-          query[:prompt] = prompt if prompt.present?
+          supported_authorization_params.each do |param|
+            query[param] = options[param] || AUTHORIZATION_PARAM_DEFAULTS[param]
+          end
 
-          "#{AUTH_ENDPOINT}?#{URI.encode_www_form(query)}"
+          "#{AUTH_ENDPOINT}?#{URI.encode_www_form(query.compact)}"
         end
 
-        def get_user_info(code: nil, id_token: nil, access_token: nil, redirect_uri: nil, **_options)
+        def get_user_info(code: nil, id_token: nil, access_token: nil, redirect_uri: nil, nonce: nil, **_options)
           if id_token.present?
             build_response(
-              verify_id_token(id_token: id_token),
+              verify_id_token(id_token: id_token, nonce: nonce),
               tokens: { id_token: id_token }
             )
           elsif access_token.present?
@@ -44,7 +49,7 @@ module StandardId
               tokens: { access_token: access_token }
             )
           elsif code.present?
-            exchange_code_for_user_info(code: code, redirect_uri: redirect_uri)
+            exchange_code_for_user_info(code: code, redirect_uri: redirect_uri, nonce: nonce)
           else
             raise StandardId::InvalidRequestError, "Either code, id_token, or access_token must be provided"
           end
@@ -61,7 +66,7 @@ module StandardId
           DEFAULT_SCOPE
         end
 
-        def exchange_code_for_user_info(code:, redirect_uri:)
+        def exchange_code_for_user_info(code:, redirect_uri:, nonce: nil)
           raise StandardId::InvalidRequestError, "Missing authorization code" if code.blank?
 
           token_response = HttpClient.post_form(TOKEN_ENDPOINT, {
@@ -80,6 +85,11 @@ module StandardId
           access_token = parsed_token["access_token"]
           raise StandardId::InvalidRequestError, "Google response missing access token" if access_token.blank?
 
+          # If we have an ID token in the response and a nonce was provided, verify it
+          if parsed_token["id_token"].present? && nonce.present?
+            verify_id_token(id_token: parsed_token["id_token"], nonce: nonce)
+          end
+
           tokens = extract_token_payload(parsed_token)
           user_info = fetch_user_info(access_token: access_token)
 
@@ -90,7 +100,7 @@ module StandardId
           raise StandardId::OAuthError, e.message, cause: e
         end
 
-        def verify_id_token(id_token:)
+        def verify_id_token(id_token:, nonce: nil)
           raise StandardId::InvalidRequestError, "Missing id_token" if id_token.blank?
 
           response = HttpClient.post_form(TOKEN_INFO_ENDPOINT, id_token: id_token)
@@ -98,6 +108,15 @@ module StandardId
           raise StandardId::InvalidRequestError, "Invalid or expired id_token" unless response.is_a?(Net::HTTPSuccess)
 
           token_info = JSON.parse(response.body)
+
+          # Validate nonce if provided (web flow with server-generated nonce)
+          if nonce.present?
+            token_nonce = token_info["nonce"]
+            if token_nonce != nonce
+              raise StandardId::InvalidRequestError,
+                    "ID token nonce mismatch. Expected: #{nonce}, got: #{token_nonce}"
+            end
+          end
 
           unless token_info["aud"] == credentials[:client_id]
             raise StandardId::InvalidRequestError,
