@@ -9,8 +9,8 @@ Gem::Specification.new do |spec|
   spec.email   = ["code@jaryl.dev"]
 
   spec.summary = "Google Sign In provider plugin for the StandardId engine."
-  spec.description = "Extracted StandardId::Providers::Apple implementation packaged as a standalone gem so StandardId installations can opt into Sign in with Apple independently."
-  spec.homepage = "https://github.com/rarebit-one/standard_id_apple"
+  spec.description = "Extracted StandardId::Providers::Google implementation packaged as a standalone gem so StandardId installations can opt into Sign in with Google independently."
+  spec.homepage = "https://github.com/rarebit-one/standard_id_google"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.2.0"
 
