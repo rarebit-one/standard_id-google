@@ -12,3 +12,5 @@
 
 # Git worktrees
 .worktrees/
+
+*.gem
