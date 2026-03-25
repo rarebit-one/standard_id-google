@@ -9,6 +9,9 @@ permissions:
   contents: write
 
 jobs:
+  # CI is not gated here — branch protection ensures CI passes before
+  # merge to main, and tags are only pushed after the version bump PR
+  # is merged. Running CI again on tag push is redundant.
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 10
