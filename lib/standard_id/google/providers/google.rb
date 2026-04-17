@@ -205,5 +205,3 @@ module StandardId
     end
   end
 end
-
-StandardId::ProviderRegistry.register(:google, StandardId::Providers::Google)
