@@ -1,5 +1,11 @@
 # frozen_string_literal: true
 
+require "simplecov"
+SimpleCov.start do
+  enable_coverage :branch
+  add_filter "/spec/"
+end
+
 require "rails"
 require "webmock/rspec"
 require "standard_id/google"
