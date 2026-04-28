@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    standard_id-google (0.2.0)
+    standard_id-google (0.3.0)
       activesupport (>= 8.0)
       standard_id (~> 0.1, >= 0.1.7)
 
