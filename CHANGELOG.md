@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `.editorconfig` and `AGENTS.md` for dev tooling parity with the parent `standard_id` gem.
+- SimpleCov branch coverage reporting in `spec/spec_helper.rb`. No minimum threshold is enforced; `coverage/` is gitignored.
 
 ### Changed
 

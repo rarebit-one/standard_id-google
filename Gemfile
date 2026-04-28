@@ -16,4 +16,5 @@ group :development, :test do
   # Omakase Ruby styling [https://github.com/rails/rubocop-rails-omakase/]
   gem "rubocop-rails-omakase", require: false
   gem "bundler-audit", require: false
+  gem "simplecov", "~> 0.22", require: false
 end
