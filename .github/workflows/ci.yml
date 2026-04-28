@@ -13,8 +13,8 @@ jobs:
   ci:
     uses: rarebit-one/.github/.github/workflows/reusable-gem-ci.yml@v1
     with:
-      ruby-versions: '["3.2.9","3.4.4","4.0.1"]'
-      lint-ruby-version: "4.0.1"
+      ruby-versions: '["4.0.0","4.0.1","4.0.2","4.0.3"]'
+      lint-ruby-version: "4.0.3"
       extra-lint-commands: |
         gem install bundler-audit
         bundler-audit check --update
