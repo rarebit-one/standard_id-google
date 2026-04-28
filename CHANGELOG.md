@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-29
+
 ### Added
 
 - `.editorconfig` and `AGENTS.md` for dev tooling parity with the parent `standard_id` gem.
