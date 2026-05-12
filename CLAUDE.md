@@ -24,3 +24,13 @@ Then work inside `.worktrees/<name>/` for the rest of the session.
 **Why this matters:** Working directly on the main checkout causes cross-contamination between sessions — uncommitted changes, wrong branches, and dirty state leak into unrelated work. Worktrees eliminate this entirely.
 
 See the `/worktree` and `/start` skills for full conventions and flags.
+
+## Consumers
+
+| App | Constraint | Style |
+|---|---|---|
+| `luminality-web` | `~> 0.3.0` | rubygems |
+
+Google Sign In is currently a Luminality-only feature; `fundbright-web` and `nutripod-web` do not consume this gem.
+
+After publishing a new version via `/publish-gem`, roll it out with the workspace-level `/rollout-gem standard_id-google [<version>]` skill. Keep this list in sync with the consumer matrix in `<workspace>/.claude/skills/rollout-gem/SKILL.md`.
