@@ -24,3 +24,9 @@ Then work inside `.worktrees/<name>/` for the rest of the session.
 **Why this matters:** Working directly on the main checkout causes cross-contamination between sessions — uncommitted changes, wrong branches, and dirty state leak into unrelated work. Worktrees eliminate this entirely.
 
 See the `/worktree` and `/start` skills for full conventions and flags.
+
+## Consumers
+
+Currently consumed by `luminality-web` only. Google Sign In is a Luminality-only feature; `fundbright-web` and `nutripod-web` do not consume this gem.
+
+After publishing a new version via `/publish-gem`, roll it out with the workspace-level `/rollout-gem standard_id-google [<version>]` skill (defined at the rarebit-one workspace root, one directory above this repo). The canonical consumer matrix — including version constraints — lives in that skill's `SKILL.md`.
