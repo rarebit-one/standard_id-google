@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Gemspec no longer packages the `.claude/` directory. Published `0.3.0` shipped
+  `.claude/settings.json`, `.claude/hooks/enforce-worktree.sh`, and three skill
+  files to every consumer — this gem's `spec.files` reject-list was the only one
+  in the `standard_*` family missing the `.claude/` prefix (`standard_id-apple`
+  already had it). Packaged file count drops 21 → 16; `lib/` and `LICENSE` are
+  unaffected.
+
 ## [0.3.0] - 2026-04-29
 
 ### Added
