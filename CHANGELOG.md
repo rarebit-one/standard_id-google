@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`standard_id` dependency tightened from `~> 0.1, >= 0.1.7` to `~> 0.29.0`.**
+  The old constraint claimed compatibility with every `0.x` release while this
+  plugin reaches into `StandardId::ProviderRegistry` and
+  `StandardId::Providers::Google`, and `standard_id` is pre-1.0 with breaking
+  minors. Bundler would happily resolve against an untested minor and fail at
+  runtime instead of at resolution. Both current consumers already pin
+  `standard_id "~> 0.29.0"`, so nothing existing is affected.
+
 ### Fixed
 
 - Gemspec no longer packages the `.claude/` directory. Published `0.3.0` shipped
@@ -15,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the `standard_*` family missing the `.claude/` prefix (`standard_id-apple`
   already had it). Packaged file count drops 21 → 16; `lib/` and `LICENSE` are
   unaffected.
+- Gemspec now uses an allow-list (`Dir["lib/**/*", …]`) rather than a
+  `git ls-files` reject-list, so packaging fails **closed** and this class of
+  leak cannot recur. Also drops `.editorconfig`, `.pinact.yaml`, `.rspec`,
+  `.rubocop.yml`, `.ruby-version`, `AGENTS.md`, `CLAUDE.md`, and
+  `CODE_OF_CONDUCT.md`; `lib/` is byte-identical.
 
 ## [0.3.0] - 2026-04-29
 

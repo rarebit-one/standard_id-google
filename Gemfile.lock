@@ -3,7 +3,7 @@ PATH
   specs:
     standard_id-google (0.3.0)
       activesupport (>= 8.0)
-      standard_id (~> 0.1, >= 0.1.7)
+      standard_id (~> 0.29.0)
 
 GEM
   remote: https://rubygems.org/
