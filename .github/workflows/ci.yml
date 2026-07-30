@@ -22,3 +22,49 @@ jobs:
       extra-lint-commands: |
         gem install bundler-audit
         bundler-audit check --update
+
+  # Resolve and test against the LATEST PUBLISHED standard_id, ignoring the
+  # committed lockfile. This plugin reaches into standard_id internals, so the
+  # gemspec constraint is a claim that needs verifying — and this job is what
+  # verifies it.
+  #
+  # It exists because the previous approach (a narrow `~> 0.29.0` gemspec cap)
+  # failed silently: standard_id reached 0.32 with no compatibility check and no
+  # plugin release, while the published gem kept an older loose requirement, so
+  # consumers ran the untested combination regardless. A CI failure here reaches
+  # the maintainer before a release; a resolution failure reaches five consumers
+  # after one.
+  compat:
+    name: Compat with latest standard_id
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
+        with:
+          ruby-version: "4.0.4"
+          bundler-cache: false
+
+      - name: Resolve against latest published standard_id
+        run: |
+          set -euo pipefail
+          rm -f Gemfile.lock
+          bundle install --jobs 4
+          # Both parses are anchored so they cannot match this gem's own name
+          # (standard_id-google) — "standard_id" must be followed by " (".
+          latest="$(gem list -r --exact standard_id \
+                    | sed -n 's/^standard_id (\([^,)]*\).*/\1/p')"
+          resolved="$(bundle list | sed -n 's/^ *\* standard_id (\(.*\))$/\1/p')"
+          if [ -z "${latest}" ] || [ -z "${resolved}" ]; then
+            echo "::error::could not determine standard_id versions (latest='${latest}' resolved='${resolved}')"
+            exit 1
+          fi
+          echo "latest published: ${latest}"
+          echo "resolved here:    ${resolved}"
+          if [ "${latest}" != "${resolved}" ]; then
+            echo "::error::gemspec constraint excludes the latest published standard_id (${latest}); it resolved ${resolved}. Widen spec.add_dependency \"standard_id\" or this gem cannot be published without capping its consumers."
+            exit 1
+          fi
+
+      - name: Test against it
+        run: bundle exec rspec
