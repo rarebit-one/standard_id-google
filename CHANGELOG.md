@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **Corrected the Configuration section, which showed a form that raised on
+  `standard_id` <= 0.32.0.** These fields are declared by this gem, and until
+  `standard_id` 0.33.0 they were declared from this gem's Railtie
+  `after_initialize` — after `config/initializers` — so the documented plain
+  initializer raised `StandardId::ConfigurationError: Unknown field
+  'google_client_id' for scope 'social'`. The README now records the
+  `after_initialize` workaround for older `standard_id`, states that 0.33.0
+  declares provider fields before `:load_config_initializers` so the plain form
+  is correct there, and notes that the fields do not exist at all without this
+  gem in the Gemfile — on any `standard_id` version.
+
 ### Changed
 
 - **`standard_id` dependency tightened from `~> 0.1, >= 0.1.7` to `~> 0.29.0`.**
