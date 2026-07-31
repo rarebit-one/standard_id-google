@@ -1,0 +1,30 @@
+# frozen_string_literal: true
+
+# Google Sign In credentials for StandardId.
+#
+# These two fields are declared by the standard_id-google gem, NOT by
+# standard_id — they do not exist unless this gem is in the Gemfile, on any
+# standard_id version. Removing the gem and leaving this file behind raises
+# `StandardId::ConfigurationError: Unknown field 'google_client_id' for scope
+# 'social'`, which is correct behaviour, not a bug.
+#
+# Set them in the `social` scope, as below. The unqualified form
+# (`config.google_client_id = ...`) happens to work today because StandardId
+# routes a unique unqualified name to its owning scope, but it stops working
+# the day another scope declares a colliding name. Use `config.social.`.
+#
+# On standard_id <= 0.32.0 these fields were declared from this gem's Railtie
+# `after_initialize`, which runs AFTER config/initializers — so the plain block
+# below raised at boot and had to be wrapped:
+#
+#   Rails.application.config.after_initialize do
+#     StandardId.configure { |config| config.social.google_client_id = ... }
+#   end
+#
+# standard_id >= 0.33.0 declares every loaded provider's fields before
+# `:load_config_initializers`, so the plain form is correct. Existing wrappers
+# keep working and need no change.
+StandardId.configure do |config|
+  config.social.google_client_id = ENV.fetch("GOOGLE_OAUTH_CLIENT_ID", nil)
+  config.social.google_client_secret = ENV.fetch("GOOGLE_OAUTH_CLIENT_SECRET", nil)
+end

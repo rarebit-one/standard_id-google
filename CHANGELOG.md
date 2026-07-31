@@ -7,7 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Install generator: `bin/rails g standard_id:google:install`.** Writes
+  `config/initializers/standard_id_google.rb` with the `social.google_*` fields
+  wired to ENV, then prints the environment variables the host has to set and
+  the reminder that `/auth/callback/google` must be registered as an authorized
+  redirect URI for **every** origin served — the Google console matches the
+  redirect exactly, so staging and production each need their own. Idempotent:
+  re-running skips an existing initializer; `--force` overwrites,
+  `--skip-initializer` writes nothing.
+
+  It writes a **separate** file rather than editing `standard_id.rb`, so the
+  provider can be removed by deleting one file and `standard_id`'s own install
+  generator stays free to overwrite its initializer without clobbering these
+  credentials. Initializers load alphabetically, so the base config is applied
+  first. The generated file uses the `config.social.` form throughout — a spec
+  pins that it never emits the unqualified `config.google_*` form, which works
+  today only because the names happen to be unique across scopes.
+
+  Five of the nine `standard_*` gems shipped an install generator and this was
+  not one of them, which left both consumers assembling the block from the
+  README by hand.
+
 ### Documentation
+
+- **Consumer list corrected in `CLAUDE.md`: this gem has two consumers, not
+  one.** It named `luminality-web` only; `sidekick-web` also consumes it. Both
+  live in sibling workspaces rather than beside this repo, which is how the
+  second one went unnoticed.
 
 - **Corrected the Configuration section, which showed a form that raised on
   `standard_id` <= 0.32.0.** These fields are declared by this gem, and until
