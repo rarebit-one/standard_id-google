@@ -27,6 +27,11 @@ See the `/worktree` and `/start` skills for full conventions and flags.
 
 ## Consumers
 
-`standard_id-google` is currently consumed by `luminality-web` only in the rarebit-one workspace. Google Sign In is a Luminality-only feature; `fundbright-web` and `nutripod-web` do not consume this gem.
+`standard_id-google` is consumed by these apps:
+
+- `luminality-web` (in the sibling `~/Workspace/luminalityai/` workspace, org `luminalityai`)
+- `sidekick-web` (in the sibling `~/Workspace/sidekick-labs/` workspace, org `sidekick-labs`)
+
+Neither consumer sits beside this repo — both live in sibling workspaces, which is how `sidekick-web` went missing from this list until 2026-07-31. `fundbright-web`, `nutripod-web` and `jumpdrive-web` do not consume this gem: the provider plugins have a narrower consumer set than the `standard_id` engine itself, which all five apps use.
 
 After publishing a new version via `/publish-gem`, roll it out with the workspace-level `/rollout-gem standard_id-google [<version>]` skill (defined at the rarebit-one workspace root, one directory above this repo). The canonical consumer matrix — including version constraints — lives in that skill's `SKILL.md`.
