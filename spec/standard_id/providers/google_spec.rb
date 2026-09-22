@@ -255,7 +255,7 @@ RSpec.describe StandardId::Providers::Google do
     end
 
     it "raises error when audience mismatches" do
-      mismatched_token_info = token_info.merge("aud" => "wrong_client_id")
+      mismatched_token_info = token_info.merge(aud: "wrong_client_id")
       stub_request(:post, "https://oauth2.googleapis.com/tokeninfo")
         .to_return(status: 200, body: mismatched_token_info.to_json)
 
@@ -265,7 +265,7 @@ RSpec.describe StandardId::Providers::Google do
     end
 
     it "raises error when issuer is invalid" do
-      invalid_issuer_token_info = token_info.merge("iss" => "evil.com")
+      invalid_issuer_token_info = token_info.merge(iss: "evil.com")
       stub_request(:post, "https://oauth2.googleapis.com/tokeninfo")
         .to_return(status: 200, body: invalid_issuer_token_info.to_json)
 
@@ -275,7 +275,7 @@ RSpec.describe StandardId::Providers::Google do
     end
 
     it "works with https:// prefixed issuer" do
-      https_issuer_token_info = token_info.merge("iss" => "https://accounts.google.com")
+      https_issuer_token_info = token_info.merge(iss: "https://accounts.google.com")
       stub_request(:post, "https://oauth2.googleapis.com/tokeninfo")
         .with(body: { id_token: id_token })
         .to_return(status: 200, body: https_issuer_token_info.to_json)
