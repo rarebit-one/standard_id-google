@@ -30,19 +30,26 @@ Gem::Specification.new do |spec|
 
   spec.add_dependency "activesupport", ">= 8.0"
   # This plugin reaches into standard_id internals (StandardId::ProviderRegistry,
-  # StandardId::Providers::Google), so its compatibility with a given standard_id
-  # really does need checking rather than assuming.
+  # StandardId::Providers::Base helpers, StandardId::HttpClient), so its
+  # compatibility with a given standard_id really does need checking rather than
+  # assuming.
   #
-  # That check is enforced in CI (the `compat` job resolves and tests against the
+  # The FLOOR is 0.42: this release uses the provider-plugin API that shipped
+  # there (Base#rescue_to_oauth_error / verify_nonce! / build_authorization_url /
+  # extract_tokens, Providers.plugin_railtie, and `required:` / `env:` in
+  # config_schema — which older standard_id passes straight to ConfigSchema and
+  # raises ArgumentError on).
+  #
+  # The CEILING stays loose (`~> 0.42` = `< 1.0`), and compatibility above the
+  # floor is enforced in CI (the `compat` job resolves and tests against the
   # LATEST PUBLISHED standard_id), not by a narrow runtime constraint. A narrow
   # constraint was tried — `~> 0.29.0` — and it failed badly: standard_id went to
   # 0.30, 0.31 and 0.32 with no compatibility check and no plugin release, while
   # the *published* 0.3.0 kept the older loose `~> 0.1` requirement. So consumers
   # ran the untested combination anyway, and the cap sat unreleased on main as a
-  # loaded gun: publishing this gem would have forced luminality-web and
-  # sidekick-web back to the 0.29 series or broken resolution outright.
+  # loaded gun.
   #
   # Resolution-time caps only work if someone acts on every failure. CI failing
   # the maintainer is strictly better than bundler failing five consumers.
-  spec.add_dependency "standard_id", ">= 0.29", "< 1.0"
+  spec.add_dependency "standard_id", "~> 0.42"
 end
