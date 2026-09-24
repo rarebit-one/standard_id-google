@@ -7,6 +7,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-24
+
+Adopts the provider-plugin API of standard_id 0.42.
+
+### Upgrade
+
+- **Requires `standard_id` 0.42** (`~> 0.42`, was `>= 0.29, < 1.0`). Bump both
+  together.
+- **Rename `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` to
+  `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`** when convenient. Initializers
+  from the 0.4.0 generator assign the old names explicitly and keep working
+  unchanged; the old names are also read as a deprecated ENV fallback (see
+  Deprecated). sidekick-web already uses the canonical names.
+- **Expect a boot warning if the secret is missing.** With `google_client_id`
+  set and `google_client_secret` blank, standard_id now logs a warning at boot
+  (raises in production under `c.social.provider_misconfiguration = :raise`).
+  An app that deliberately accepts only native ID tokens and has no secret
+  should keep that setting at `:warn`.
+- **Specs stubbing the tokeninfo call:** access-token verification now posts to
+  `TOKEN_INFO_ENDPOINT` (`https://oauth2.googleapis.com/tokeninfo`), not
+  `https://www.googleapis.com/oauth2/v3/tokeninfo`. ID-token stubs against
+  `TOKEN_INFO_ENDPOINT` (sidekick-web's `social_callback_spec.rb`) are
+  unaffected.
+- **Anyone rescuing on message text:** several messages changed (see Changed).
+  `StandardId::Google::Railtie` no longer exists.
+
+### Added
+
+- **Required config field.** `google_client_secret` is declared
+  `required: true`, so `StandardId::Providers::Google.configuration_errors` and
+  standard_id's boot check report it whenever `google_client_id` (the enabling
+  field) is set.
+- **ENV fallback** through standard_id 0.42: `GOOGLE_CLIENT_ID`,
+  `GOOGLE_CLIENT_SECRET`.
+- Specs for `resolve_params`, `skip_csrf?`, `supports_mobile_callback?` /
+  `flow_for`, nonce handling (web code exchange included) and configuration,
+  plus standard_id's `"a registered StandardId provider"` shared example.
+
+### Changed
+
+- **One tokeninfo endpoint.** ID tokens and access tokens are both verified
+  against `TOKEN_INFO_ENDPOINT`, `https://oauth2.googleapis.com/tokeninfo` —
+  the endpoint Google documents for both. Access tokens previously went to a
+  hard-coded `https://www.googleapis.com/oauth2/v3/tokeninfo`.
+- **The id_token and access_token flows no longer need `google_client_secret`.**
+  Both verify through tokeninfo and compare the audience to the client ID; only
+  the web code exchange sends the secret. Previously every flow raised
+  `Google provider is not configured` without it.
+- **Nonce mismatches no longer leak the nonce.** The message was
+  `ID token nonce mismatch. Expected: <nonce>, got: <nonce>`; it is now
+  standard_id's `ID token nonce mismatch`, and the comparison is constant-time.
+  The nonce is now checked after the audience and issuer.
+- **Audience and issuer errors no longer echo values** — the old messages
+  included this app's client ID and the presented `aud`/`iss`. A token with no
+  `aud` at all is rejected explicitly.
+- **The duplicated helpers are gone** in favour of standard_id's
+  `Providers::Base`: `rescue_to_oauth_error`, `verify_nonce!`,
+  `build_authorization_url`, `extract_tokens` (the private
+  `extract_token_payload` is removed). `lib/standard_id/google/railtie.rb` is
+  replaced by `StandardId::Providers.plugin_railtie(:google, ...)`.
+- **Error messages**, now consistently Google-prefixed:
+  - `Either code, id_token, or access_token must be provided` → `Google sign-in requires a code, an id_token or an access_token`
+  - `Google provider is not configured` → `Google OAuth is not configured` (client ID missing) or `Google OAuth credentials are incomplete: google_client_secret not set` (code exchange only)
+  - `Missing authorization code` → `Google authorization code is missing`
+  - `Failed to exchange Google authorization code` → `...: <error>` (Google's `error`, else `HTTP <status>`)
+  - `Google response missing access token` → `Google token response is missing access_token`
+  - `Missing id_token` → `Google id_token is missing`
+  - `Invalid or expired id_token` → `Invalid Google ID token: invalid or expired`
+  - `ID token audience mismatch. Expected: ..., got: ...` → `Invalid Google ID token audience`
+  - `ID token issuer invalid. Expected Google, got: ...` → `Invalid Google ID token issuer`
+  - `Missing access token` → `Google access token is missing`
+  - `Invalid or expired access token` → `Invalid Google access token: invalid or expired`
+  - `Access token audience mismatch. Expected: ..., got: ...` → `Invalid Google access token audience`
+  - `Failed to fetch Google user info` → `...: HTTP <status>`
+- **Spec layout mirrors `lib/`** and standard_id-apple:
+  `spec/standard_id/providers/google_spec.rb` →
+  `spec/standard_id/google/providers/google_spec.rb`, plus
+  `spec/standard_id/google/registration_spec.rb`.
+- Install generator and README use the canonical `GOOGLE_CLIENT_ID` /
+  `GOOGLE_CLIENT_SECRET`, and document the ENV fallback, required field and
+  flows.
+
+### Deprecated
+
+- **`GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`** as ENV sources.
+  Read only when the field is never assigned and the canonical variable is
+  unset, with one warning per variable per process through
+  `StandardId.deprecator`.
+
+### Removed
+
+- `StandardId::Google::Railtie` (replaced by the Railtie `plugin_railtie`
+  defines, `StandardId::Providers::Railties::Google`).
+
 ## [0.4.0] - 2026-07-31
 
 ### Added

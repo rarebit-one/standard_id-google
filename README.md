@@ -4,6 +4,8 @@ This gem extracts the Google OAuth provider from the core [`standard_id`](https:
 
 ## Installation
 
+Requires `standard_id` 0.42 or later.
+
 Add the gem next to `standard_id`:
 
 ```ruby
@@ -41,14 +43,61 @@ configuring by hand. Configure your Google credentials inside the StandardId
 configuration block:
 
 ```ruby
-# config/initializers/standard_id.rb
+# config/initializers/standard_id_google.rb
 StandardId.configure do |config|
-  config.social.google_client_id = ENV.fetch("GOOGLE_OAUTH_CLIENT_ID", nil)
-  config.social.google_client_secret = ENV.fetch("GOOGLE_OAUTH_CLIENT_SECRET", nil)
+  config.social.google_client_id = ENV.fetch("GOOGLE_CLIENT_ID", nil)
+  config.social.google_client_secret = ENV.fetch("GOOGLE_CLIENT_SECRET", nil)
 end
 ```
 
 With those values in place, StandardId routes such as `/auth/callback/google` continue to function using this provider gem.
+
+### ENV fallback
+
+On `standard_id` 0.42+, a field you never assign falls back to the ENV
+variable named after it, upper-cased:
+
+| Field | ENV variable | Deprecated fallback |
+|---|---|---|
+| `google_client_id` | `GOOGLE_CLIENT_ID` | `GOOGLE_OAUTH_CLIENT_ID` |
+| `google_client_secret` | `GOOGLE_CLIENT_SECRET` | `GOOGLE_OAUTH_CLIENT_SECRET` |
+
+So with those variables set the block above is optional. Explicit
+configuration, even `nil`, always wins. The `GOOGLE_OAUTH_*` names — what
+install generators before 0.5.0 wrote — are still read when the canonical
+variable is unset and the field is never assigned, with a deprecation warning;
+rename them. (An initializer that assigns `ENV.fetch("GOOGLE_OAUTH_CLIENT_ID")`
+explicitly keeps working as-is.)
+
+### Required fields and the boot check
+
+`google_client_id` switches the provider on — it is what
+`StandardId.social_provider_enabled?(:google)` and the `google_enabled` Inertia
+prop report. While it is set, `google_client_secret` is required: the web
+sign-in's code exchange needs it, so without it the user authenticates with
+Google and only then does the callback fail. StandardId checks this once every
+plugin has registered:
+
+```ruby
+StandardId::Providers::Google.configuration_errors
+# => ["google_client_secret is required when google_client_id is set"]
+
+config.social.provider_misconfiguration = :raise # fail a production boot instead of warning
+```
+
+### Flows
+
+| Flow | Needs `google_client_secret` |
+|---|---|
+| Web (`/auth/callback/google`, authorization code) | yes |
+| Native `id_token` (`/api/oauth/callback/google`) | no |
+| Native `access_token` | no |
+
+ID tokens and access tokens are both checked against Google's tokeninfo
+endpoint (`https://oauth2.googleapis.com/tokeninfo`), then against this app's
+client ID. An app that only accepts native ID tokens can run without a client
+secret; it will get the boot warning above, because an enabled provider shows
+the web sign-in button — leave `provider_misconfiguration` at `:warn` there.
 
 ### Boot ordering (standard_id <= 0.32.0)
 
@@ -67,8 +116,8 @@ The workaround was to wrap the writes:
 # Only needed on standard_id <= 0.32.0
 Rails.application.config.after_initialize do
   StandardId.configure do |config|
-    config.social.google_client_id = ENV.fetch("GOOGLE_OAUTH_CLIENT_ID", nil)
-    config.social.google_client_secret = ENV.fetch("GOOGLE_OAUTH_CLIENT_SECRET", nil)
+    config.social.google_client_id = ENV.fetch("GOOGLE_CLIENT_ID", nil)
+    config.social.google_client_secret = ENV.fetch("GOOGLE_CLIENT_SECRET", nil)
   end
 end
 ```
@@ -82,6 +131,17 @@ without this gem in your Gemfile**, on any `standard_id` version. Configuring
 `social.google_*` with the plugin absent raises the same error, correctly.
 
 ## Testing
+
+In a host app, pin the plugin's registration with standard_id's shared
+example:
+
+```ruby
+require "standard_id/testing"
+
+RSpec.describe "StandardId social providers" do
+  it_behaves_like "a registered StandardId provider", :google
+end
+```
 
 Run the provider test suite with:
 

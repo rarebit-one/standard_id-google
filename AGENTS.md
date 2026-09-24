@@ -1,6 +1,6 @@
 # AGENTS.md - AI Agent Guide for standard_id-google
 
-`standard_id-google` is a provider plugin for the [StandardId](https://github.com/rarebit-one/standard_id) authentication engine. It packages a `StandardId::Providers::Google` implementation for Sign in with Google, and auto-registers itself with the host StandardId installation via a `Rails::Railtie` so apps that bundle the gem don't need an explicit initializer.
+`standard_id-google` is a provider plugin for the [StandardId](https://github.com/rarebit-one/standard_id) authentication engine. It packages a `StandardId::Providers::Google` implementation for Sign in with Google, and auto-registers itself with the host StandardId installation via a Railtie (defined by `StandardId::Providers.plugin_railtie`) so apps that bundle the gem don't need an explicit initializer.
 
 ## Quick Reference
 
@@ -23,14 +23,13 @@ bundle exec rubocop --config .rubocop.yml -A
 ```
 standard_id-google/
 ├── lib/standard_id/
-│   ├── google.rb                        # Top-level require entrypoint
+│   ├── google.rb                        # Entry file; calls plugin_railtie(:google, ...)
 │   └── google/
 │       ├── version.rb                   # Gem version constant
-│       ├── railtie.rb                   # Auto-registers provider on after_initialize
 │       └── providers/google.rb          # StandardId::Providers::Google implementation
 └── spec/
     ├── spec_helper.rb                   # Boots a minimal Rails app so the Railtie fires
-    └── standard_id/                     # Provider specs
+    └── standard_id/google/              # Mirrors lib/: providers/google_spec.rb, registration_spec.rb
 ```
 
 ## Key Patterns
@@ -41,7 +40,7 @@ standard_id-google/
 
 ### Railtie auto-registration
 
-`StandardId::Google::Railtie` runs on `config.after_initialize` and calls `StandardId::ProviderRegistry.register(:google, StandardId::Providers::Google)`. Host apps just need the gem in their Gemfile — no initializer required.
+The entry file calls `StandardId::Providers.plugin_railtie(:google, "StandardId::Providers::Google")` (standard_id >= 0.42), which defines `StandardId::Providers::Railties::Google`; it runs on `config.after_initialize` and calls `StandardId::ProviderRegistry.register(:google, ...)`. Host apps just need the gem in their Gemfile — no initializer required.
 
 ### Spec bootstrapping
 
@@ -52,14 +51,13 @@ standard_id-google/
 | File | Purpose |
 |------|---------|
 | `lib/standard_id/google.rb` | Top-level require entrypoint |
-| `lib/standard_id/google/railtie.rb` | Provider registration on Rails boot |
 | `lib/standard_id/google/providers/google.rb` | Google provider implementation |
 | `lib/standard_id/google/version.rb` | Gem version constant |
 | `standard_id-google.gemspec` | Gem metadata + runtime deps |
 
 ## Dependencies
 
-- **standard_id** `~> 0.1`, `>= 0.1.7` (parent engine — provides `Providers::Base`, `ProviderRegistry`, `HttpClient`, errors)
+- **standard_id** `~> 0.42` (parent engine — provides `Providers::Base`, `ProviderRegistry`, `HttpClient`, errors)
 - **activesupport** `>= 8.0` (`present?`/`blank?`, indifferent access)
 
 Dev: rspec, rubocop, webmock, lefthook.
