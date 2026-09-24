@@ -1,5 +1,5 @@
 require "json"
-require "uri"
+require "net/http"
 
 module StandardId
   module Providers
@@ -7,10 +7,24 @@ module StandardId
       AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth".freeze
       TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token".freeze
       USERINFO_ENDPOINT = "https://www.googleapis.com/oauth2/v2/userinfo".freeze
+      # Google's documented tokeninfo endpoint, for both ID tokens and access
+      # tokens (developers.google.com/identity/sign-in/web/backend-auth,
+      # developers.google.com/identity/protocols/oauth2). The legacy
+      # www.googleapis.com/oauth2/v3/tokeninfo host is no longer used.
       TOKEN_INFO_ENDPOINT = "https://oauth2.googleapis.com/tokeninfo".freeze
+      VALID_ISSUERS = ["accounts.google.com", "https://accounts.google.com"].freeze
       DEFAULT_SCOPE = "openid email profile".freeze
       AUTHORIZATION_PARAM_DEFAULTS = {
         scope: DEFAULT_SCOPE
+      }.freeze
+
+      # Pre-0.5.0 install generators wired the fields to these variables.
+      # Still read, with a deprecation warning, when the canonical variable
+      # (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET) is unset and the host never
+      # assigns the field.
+      LEGACY_ENV = {
+        google_client_id: "GOOGLE_OAUTH_CLIENT_ID",
+        google_client_secret: "GOOGLE_OAUTH_CLIENT_SECRET"
       }.freeze
 
       class << self
@@ -23,18 +37,12 @@ module StandardId
         end
 
         def authorization_url(state:, redirect_uri:, **options)
-          query = {
+          build_authorization_url(
+            endpoint: AUTH_ENDPOINT,
             client_id: credentials[:client_id],
-            redirect_uri: redirect_uri,
-            response_type: "code",
-            state: state
-          }
-
-          supported_authorization_params.each do |param|
-            query[param] = options[param] || AUTHORIZATION_PARAM_DEFAULTS[param]
-          end
-
-          "#{AUTH_ENDPOINT}?#{URI.encode_www_form(query.compact)}"
+            redirect_uri:, state:, options:,
+            defaults: AUTHORIZATION_PARAM_DEFAULTS
+          )
         end
 
         def get_user_info(code: nil, id_token: nil, access_token: nil, redirect_uri: nil, nonce: nil, **_options)
@@ -51,14 +59,25 @@ module StandardId
           elsif code.present?
             exchange_code_for_user_info(code: code, redirect_uri: redirect_uri, nonce: nonce)
           else
-            raise StandardId::InvalidRequestError, "Either code, id_token, or access_token must be provided"
+            raise StandardId::InvalidRequestError, "Google sign-in requires a code, an id_token or an access_token"
           end
         end
 
+        # `google_client_id` switches the provider on (it is the enabling
+        # field). `google_client_secret` is required while it is set: an
+        # enabled provider shows the web sign-in button, and the web flow's
+        # code exchange needs the secret — without it the user authenticates
+        # with Google and only then does the callback fail. The native
+        # id_token and access_token flows verify through Google's tokeninfo
+        # endpoint and need only the client ID.
+        #
+        # ENV fallbacks (standard_id >= 0.42): GOOGLE_CLIENT_ID and
+        # GOOGLE_CLIENT_SECRET; the pre-0.5.0 GOOGLE_OAUTH_* names are read as
+        # a deprecated fallback.
         def config_schema
           {
-            google_client_id: { type: :string, default: nil },
-            google_client_secret: { type: :string, default: nil }
+            google_client_id: { type: :string, default: -> { legacy_env(:google_client_id) } },
+            google_client_secret: { type: :string, default: -> { legacy_env(:google_client_secret) }, required: true }
           }
         end
 
@@ -67,139 +86,143 @@ module StandardId
         end
 
         def exchange_code_for_user_info(code:, redirect_uri:, nonce: nil)
-          raise StandardId::InvalidRequestError, "Missing authorization code" if code.blank?
+          rescue_to_oauth_error do
+            raise StandardId::InvalidRequestError, "Google authorization code is missing" if code.blank?
 
-          token_response = HttpClient.post_form(TOKEN_ENDPOINT, {
-            client_id: credentials[:client_id],
-            client_secret: credentials[:client_secret],
-            code: code,
-            grant_type: "authorization_code",
-            redirect_uri: redirect_uri
-          }.compact)
+            creds = credentials
+            if creds[:client_secret].blank?
+              raise StandardId::InvalidRequestError, "Google OAuth credentials are incomplete: google_client_secret not set"
+            end
 
-          unless token_response.is_a?(Net::HTTPSuccess)
-            raise StandardId::InvalidRequestError, "Failed to exchange Google authorization code"
+            token_response = HttpClient.post_form(TOKEN_ENDPOINT, {
+              client_id: creds[:client_id],
+              client_secret: creds[:client_secret],
+              code: code,
+              grant_type: "authorization_code",
+              redirect_uri: redirect_uri
+            }.compact)
+
+            unless token_response.is_a?(Net::HTTPSuccess)
+              raise StandardId::InvalidRequestError,
+                    "Failed to exchange Google authorization code: #{error_reason(token_response)}"
+            end
+
+            parsed_token = JSON.parse(token_response.body)
+            access_token = parsed_token["access_token"]
+            raise StandardId::InvalidRequestError, "Google token response is missing access_token" if access_token.blank?
+
+            # Web flow with a server-generated nonce: check it on the ID token.
+            if parsed_token["id_token"].present? && nonce.present?
+              verify_id_token(id_token: parsed_token["id_token"], nonce: nonce)
+            end
+
+            build_response(fetch_user_info(access_token: access_token), tokens: extract_tokens(parsed_token))
           end
-
-          parsed_token = JSON.parse(token_response.body)
-          access_token = parsed_token["access_token"]
-          raise StandardId::InvalidRequestError, "Google response missing access token" if access_token.blank?
-
-          # If we have an ID token in the response and a nonce was provided, verify it
-          if parsed_token["id_token"].present? && nonce.present?
-            verify_id_token(id_token: parsed_token["id_token"], nonce: nonce)
-          end
-
-          tokens = extract_token_payload(parsed_token)
-          user_info = fetch_user_info(access_token: access_token)
-
-          build_response(user_info, tokens: tokens)
-        rescue StandardError => e
-          raise e if e.is_a?(StandardId::OAuthError)
-
-          raise StandardId::OAuthError, e.message, cause: e
         end
 
+        # Verifies through Google's tokeninfo endpoint, which checks the
+        # signature and expiry; the audience, issuer and nonce are checked
+        # here. Needs only the client ID.
         def verify_id_token(id_token:, nonce: nil)
-          raise StandardId::InvalidRequestError, "Missing id_token" if id_token.blank?
+          rescue_to_oauth_error do
+            raise StandardId::InvalidRequestError, "Google id_token is missing" if id_token.blank?
 
-          response = HttpClient.post_form(TOKEN_INFO_ENDPOINT, id_token: id_token)
+            response = HttpClient.post_form(TOKEN_INFO_ENDPOINT, id_token: id_token)
+            raise StandardId::InvalidRequestError, "Invalid Google ID token: invalid or expired" unless response.is_a?(Net::HTTPSuccess)
 
-          raise StandardId::InvalidRequestError, "Invalid or expired id_token" unless response.is_a?(Net::HTTPSuccess)
+            token_info = JSON.parse(response.body)
 
-          token_info = JSON.parse(response.body)
-
-          # Validate nonce if provided (web flow with server-generated nonce)
-          if nonce.present?
-            token_nonce = token_info["nonce"]
-            if token_nonce != nonce
-              raise StandardId::InvalidRequestError,
-                    "ID token nonce mismatch. Expected: #{nonce}, got: #{token_nonce}"
+            unless token_info["aud"].present? && token_info["aud"] == credentials[:client_id]
+              raise StandardId::InvalidRequestError, "Invalid Google ID token audience"
             end
+
+            unless VALID_ISSUERS.include?(token_info["iss"])
+              raise StandardId::InvalidRequestError, "Invalid Google ID token issuer"
+            end
+
+            # Constant-time, and the error never echoes either value.
+            verify_nonce!(expected: nonce, actual: token_info["nonce"])
+
+            {
+              "sub" => token_info["sub"],
+              "email" => token_info["email"],
+              "email_verified" => token_info["email_verified"],
+              "name" => token_info["name"],
+              "given_name" => token_info["given_name"],
+              "family_name" => token_info["family_name"],
+              "picture" => token_info["picture"],
+              "locale" => token_info["locale"]
+            }.compact
           end
-
-          unless token_info["aud"] == credentials[:client_id]
-            raise StandardId::InvalidRequestError,
-                  "ID token audience mismatch. Expected: #{credentials[:client_id]}, got: #{token_info["aud"]}"
-          end
-
-          unless ["accounts.google.com", "https://accounts.google.com"].include?(token_info["iss"])
-            raise StandardId::InvalidRequestError,
-                  "ID token issuer invalid. Expected Google, got: #{token_info["iss"]}"
-          end
-
-          {
-            "sub" => token_info["sub"],
-            "email" => token_info["email"],
-            "email_verified" => token_info["email_verified"],
-            "name" => token_info["name"],
-            "given_name" => token_info["given_name"],
-            "family_name" => token_info["family_name"],
-            "picture" => token_info["picture"],
-            "locale" => token_info["locale"]
-          }.compact
-        rescue StandardError => e
-          raise e if e.is_a?(StandardId::OAuthError)
-
-          raise StandardId::OAuthError, e.message, cause: e
         end
 
         def fetch_user_info(access_token:)
-          raise StandardId::InvalidRequestError, "Missing access token" if access_token.blank?
+          rescue_to_oauth_error do
+            raise StandardId::InvalidRequestError, "Google access token is missing" if access_token.blank?
 
-          verify_token(access_token)
-          user_response = HttpClient.get_with_bearer(USERINFO_ENDPOINT, access_token)
+            verify_token(access_token)
+            user_response = HttpClient.get_with_bearer(USERINFO_ENDPOINT, access_token)
 
-          unless user_response.is_a?(Net::HTTPSuccess)
-            raise StandardId::InvalidRequestError, "Failed to fetch Google user info"
+            unless user_response.is_a?(Net::HTTPSuccess)
+              raise StandardId::InvalidRequestError, "Failed to fetch Google user info: HTTP #{user_response.code}"
+            end
+
+            JSON.parse(user_response.body)
           end
-
-          JSON.parse(user_response.body)
-        rescue StandardError => e
-          raise e if e.is_a?(StandardId::OAuthError)
-
-          raise StandardId::OAuthError, e.message, cause: e
         end
 
         private
 
+        # The client ID every flow needs, and the secret only the code
+        # exchange needs (checked there). Raises when the provider is off.
         def credentials
           client_id = StandardId.config.google_client_id
-          client_secret = StandardId.config.google_client_secret
-
-          if client_id.blank? || client_secret.blank?
-            raise StandardId::InvalidRequestError, "Google provider is not configured"
-          end
+          raise StandardId::InvalidRequestError, "Google OAuth is not configured" if client_id.blank?
 
           {
             client_id: client_id,
-            client_secret: client_secret
+            client_secret: StandardId.config.google_client_secret
           }
         end
 
+        # Confirms an access token was issued to this app's client before its
+        # userinfo is trusted.
         def verify_token(access_token)
-          response = HttpClient.post_form("https://www.googleapis.com/oauth2/v3/tokeninfo", access_token: access_token)
-
-          unless response.is_a?(Net::HTTPSuccess)
-            raise StandardId::InvalidRequestError, "Invalid or expired access token"
-          end
+          response = HttpClient.post_form(TOKEN_INFO_ENDPOINT, access_token: access_token)
+          raise StandardId::InvalidRequestError, "Invalid Google access token: invalid or expired" unless response.is_a?(Net::HTTPSuccess)
 
           token_info = JSON.parse(response.body)
 
-          unless token_info["aud"] == credentials[:client_id]
-            raise StandardId::InvalidRequestError,
-                  "Access token audience mismatch. Expected: #{credentials[:client_id]}, got: #{token_info["aud"]}"
+          unless token_info["aud"].present? && token_info["aud"] == credentials[:client_id]
+            raise StandardId::InvalidRequestError, "Invalid Google access token audience"
           end
 
           token_info
         end
 
-        def extract_token_payload(parsed_token)
-          {
-            access_token: parsed_token["access_token"],
-            refresh_token: parsed_token["refresh_token"],
-            id_token: parsed_token["id_token"]
-          }.compact
+        def error_reason(response)
+          body = JSON.parse(response.body.to_s)
+          reason = body["error"] if body.is_a?(Hash)
+          reason.presence || "HTTP #{response.code}"
+        rescue JSON::ParserError
+          "HTTP #{response.code}"
+        end
+
+        def legacy_env(field)
+          name = LEGACY_ENV.fetch(field)
+          value = ENV[name]
+          return nil if value.blank?
+
+          # An unassigned field's default is re-evaluated on read; warn once.
+          @legacy_env_warned ||= {}
+          return value if @legacy_env_warned[name]
+
+          @legacy_env_warned[name] = true
+          StandardId.deprecator.warn(
+            "standard_id-google: reading #{field} from #{name} is deprecated. " \
+            "Rename the variable to #{field.to_s.upcase} (or assign config.social.#{field} explicitly)."
+          )
+          value
         end
       end
     end

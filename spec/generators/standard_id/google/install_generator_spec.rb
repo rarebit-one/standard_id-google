@@ -52,6 +52,15 @@ RSpec.describe StandardId::Google::Generators::InstallGenerator do
     expect(content).to include("config.social.google_client_secret")
   end
 
+  it "reads the canonical ENV names, which match standard_id's ENV fallback" do
+    run_generator
+    content = File.read(initializer_path)
+
+    expect(content).to include(%(ENV.fetch("GOOGLE_CLIENT_ID", nil)))
+    expect(content).to include(%(ENV.fetch("GOOGLE_CLIENT_SECRET", nil)))
+    expect(content).not_to match(/ENV\.fetch\("GOOGLE_OAUTH_/)
+  end
+
   # The flat form works today only because the name happens to be unique across
   # scopes; it breaks silently the day it isn't. The generated file must never
   # teach it.

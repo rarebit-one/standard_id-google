@@ -22,6 +22,11 @@ module StandardIdGoogleTest
   end
 end
 
+# standard_id 0.42's boot-time missing-migration check (on by default in
+# test) scans the host's db/migrate via ActiveRecord. This minimal app has no
+# ActiveRecord and no migrations, so switch the check off.
+StandardId.configure { |config| config.missing_migrations = :ignore }
+
 Rails.application.initialize!
 
 RSpec.configure do |config|
