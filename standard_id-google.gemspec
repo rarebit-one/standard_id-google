@@ -28,7 +28,7 @@ Gem::Specification.new do |spec|
   end
   spec.require_paths = ["lib"]
 
-  spec.add_dependency "activesupport", ">= 8.0"
+  spec.add_dependency "activesupport", ">= 8.1"
   # This plugin reaches into standard_id internals (StandardId::ProviderRegistry,
   # StandardId::Providers::Base helpers, StandardId::HttpClient), so its
   # compatibility with a given standard_id really does need checking rather than

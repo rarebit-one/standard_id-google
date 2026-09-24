@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Requires Rails 8.1** (`activesupport >= 8.1`, was `>= 8.0`). Every
+  consumer app already runs 8.1; 8.0 was never exercised in CI.
+
 ## [0.5.0] - 2026-09-24
 
 Adopts the provider-plugin API of standard_id 0.42.
