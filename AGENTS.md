@@ -58,7 +58,7 @@ The entry file calls `StandardId::Providers.plugin_railtie(:google, "StandardId:
 ## Dependencies
 
 - **standard_id** `~> 0.42` (parent engine — provides `Providers::Base`, `ProviderRegistry`, `HttpClient`, errors)
-- **activesupport** `>= 8.0` (`present?`/`blank?`, indifferent access)
+- **activesupport** `>= 8.1` (`present?`/`blank?`, indifferent access)
 
 Dev: rspec, rubocop, webmock, lefthook.
 

@@ -29,7 +29,7 @@ See the `/worktree` and `/start` skills for full conventions and flags.
 
 `standard_id-google` is consumed by these apps:
 
-- `luminality-web` (in the sibling `~/Workspace/luminalityai/` workspace, org `luminalityai`)
+- `luminality-web` (in the sibling `~/Workspace/luminality/` workspace, org `luminalityai`)
 - `sidekick-web` (in the sibling `~/Workspace/sidekick-labs/` workspace, org `sidekick-labs`)
 
 Neither consumer sits beside this repo — both live in sibling workspaces, which is how `sidekick-web` went missing from this list until 2026-07-31. `fundbright-web`, `nutripod-web` and `jumpdrive-web` do not consume this gem: the provider plugins have a narrower consumer set than the `standard_id` engine itself, which all five apps use.
