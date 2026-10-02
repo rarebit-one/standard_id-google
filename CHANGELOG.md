@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-02
+
+Pairs with **standard_id 0.44.0** (security fix L1-01), which matches returning
+social logins on the provider's `sub` and links an existing account only when
+the provider reports `email_verified`.
+
+### Fixed
+
+- **The code-exchange and access-token paths now return `sub` and
+  `email_verified`.** They read Google's OAuth2 v2 userinfo endpoint, which
+  calls those claims `id` and `verified_email`, and returned its JSON as-is, so
+  standard_id never saw a subject for web (code) or native access-token
+  sign-ins. `fetch_user_info` now adds `sub` (from `id`) and `email_verified`
+  (from `verified_email`), keeping the original keys, and raises
+  `StandardId::InvalidRequestError` if the userinfo subject differs from the
+  `sub` tokeninfo reported for the access token. The ID-token path already
+  returned both claims (`email_verified` arrives there as the string `"true"`,
+  which standard_id 0.44 accepts).
+
+### Upgrade
+
+- Bump together with standard_id 0.44.0. On standard_id < 0.44 the extra keys
+  are ignored, so this release is also safe on its own.
+
 ### Changed
 
 - **Requires Rails 8.1** (`activesupport >= 8.1`, was `>= 8.0`). Every

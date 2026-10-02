@@ -440,6 +440,55 @@ RSpec.describe StandardId::Providers::Google do
       expect(result).to eq(user_info)
     end
 
+    context "with the v2 userinfo shape (id / verified_email)" do
+      let(:v2_info) do
+        { "id" => "108234", "email" => "user@example.com", "verified_email" => true, "name" => "Test User" }
+      end
+
+      before do
+        stub_request(:get, "https://www.googleapis.com/oauth2/v2/userinfo")
+          .to_return(status: 200, body: v2_info.to_json)
+      end
+
+      it "adds the OIDC sub and email_verified claims and keeps the originals" do
+        stub_request(:post, "https://oauth2.googleapis.com/tokeninfo")
+          .to_return(status: 200, body: { aud: google_client_id, sub: "108234" }.to_json)
+
+        result = described_class.fetch_user_info(access_token: access_token)
+
+        expect(result).to include("sub" => "108234", "email_verified" => true, "id" => "108234", "verified_email" => true)
+      end
+
+      it "passes verified_email: false through as email_verified: false" do
+        v2_info["verified_email"] = false
+        stub_request(:get, "https://www.googleapis.com/oauth2/v2/userinfo")
+          .to_return(status: 200, body: v2_info.to_json)
+        stub_request(:post, "https://oauth2.googleapis.com/tokeninfo")
+          .to_return(status: 200, body: { aud: google_client_id }.to_json)
+
+        expect(described_class.fetch_user_info(access_token: access_token)["email_verified"]).to be(false)
+      end
+
+      it "omits email_verified when Google reports neither key" do
+        v2_info.delete("verified_email")
+        stub_request(:get, "https://www.googleapis.com/oauth2/v2/userinfo")
+          .to_return(status: 200, body: v2_info.to_json)
+        stub_request(:post, "https://oauth2.googleapis.com/tokeninfo")
+          .to_return(status: 200, body: { aud: google_client_id }.to_json)
+
+        expect(described_class.fetch_user_info(access_token: access_token)).not_to have_key("email_verified")
+      end
+
+      it "raises when the userinfo subject differs from the access token's" do
+        stub_request(:post, "https://oauth2.googleapis.com/tokeninfo")
+          .to_return(status: 200, body: { aud: google_client_id, sub: "999" }.to_json)
+
+        expect do
+          described_class.fetch_user_info(access_token: access_token)
+        end.to raise_error(StandardId::OAuthError, "Google user info does not match the access token")
+      end
+    end
+
     it "raises error when access_token is blank" do
       expect do
         described_class.fetch_user_info(access_token: "")
