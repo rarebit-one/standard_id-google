@@ -160,14 +160,14 @@ module StandardId
           rescue_to_oauth_error do
             raise StandardId::InvalidRequestError, "Google access token is missing" if access_token.blank?
 
-            verify_token(access_token)
+            token_info = verify_token(access_token)
             user_response = HttpClient.get_with_bearer(USERINFO_ENDPOINT, access_token)
 
             unless user_response.is_a?(Net::HTTPSuccess)
               raise StandardId::InvalidRequestError, "Failed to fetch Google user info: HTTP #{user_response.code}"
             end
 
-            JSON.parse(user_response.body)
+            with_oidc_claims(JSON.parse(user_response.body), token_info)
           end
         end
 
@@ -198,6 +198,28 @@ module StandardId
           end
 
           token_info
+        end
+
+        # The v2 userinfo endpoint names the subject `id` and the verified
+        # flag `verified_email`. standard_id (>= 0.44) matches returning
+        # logins on the OIDC `sub` and links existing accounts only on
+        # `email_verified`, so add both claims; the original keys are kept.
+        # The subject must agree with the one tokeninfo reported for the
+        # access token, when it reported one.
+        def with_oidc_claims(user_info, token_info)
+          return user_info unless user_info.is_a?(Hash)
+
+          claims = user_info.dup
+          claims["sub"] = claims["id"].to_s.presence if claims["sub"].blank?
+          claims["email_verified"] = claims["verified_email"] if !claims.key?("email_verified") && claims.key?("verified_email")
+          claims.compact!
+
+          token_sub = token_info.is_a?(Hash) ? token_info["sub"].to_s.presence : nil
+          if token_sub && claims["sub"] && token_sub != claims["sub"].to_s
+            raise StandardId::InvalidRequestError, "Google user info does not match the access token"
+          end
+
+          claims
         end
 
         def error_reason(response)
