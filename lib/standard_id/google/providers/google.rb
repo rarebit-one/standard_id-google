@@ -32,16 +32,48 @@ module StandardId
           "google"
         end
 
+        # The Google Workspace domains sign-in is pinned to
+        # (`social.google_hosted_domains`): lowercase, stripped, de-duplicated.
+        # Empty means the provider is not pinned and behaves as it always has.
+        def hosted_domains
+          raw = StandardId.config.google_hosted_domains
+          list = raw.is_a?(String) ? raw.split(/[\s,]+/) : Array(raw)
+          list.map { |domain| domain.to_s.strip.downcase }.reject(&:empty?).uniq
+        end
+
+        def pinned?
+          hosted_domains.any?
+        end
+
+        # True ONLY while sign-in is pinned to Workspace domains. Core calls
+        # this on the class, after get_user_info has returned for the very
+        # login being linked, so there is no per-login question to answer:
+        # while pinned, every login that gets that far presented a verified
+        # ID token whose `hd` is one of the configured domains and whose
+        # email is on that domain (see enforce_hosted_domain!), so the
+        # address is one the domain's Workspace admin provisioned. Unpinned,
+        # Google is a public IdP and must never be trusted for linking.
+        def trusted_for_linking?
+          pinned?
+        end
+
         def supported_authorization_params
           [:nonce, :login_hint, :prompt, :scope, :access_type, :hd, :response_mode, :include_granted_scopes]
         end
 
         def authorization_url(state:, redirect_uri:, **options)
+          # With exactly one pinned domain, `hd` is sent as Google's account
+          # chooser hint (a caller-supplied `hd` still wins). It is only a
+          # hint: pinning is enforced on the verified ID token, never on it.
+          defaults = AUTHORIZATION_PARAM_DEFAULTS
+          domains = hosted_domains
+          defaults = defaults.merge(hd: domains.first) if domains.one?
+
           build_authorization_url(
             endpoint: AUTH_ENDPOINT,
             client_id: credentials[:client_id],
             redirect_uri:, state:, options:,
-            defaults: AUTHORIZATION_PARAM_DEFAULTS
+            defaults: defaults
           )
         end
 
@@ -52,6 +84,13 @@ module StandardId
               tokens: { id_token: id_token }
             )
           elsif access_token.present?
+            # An access token carries no ID token, so there is no verified
+            # `hd` claim to pin on: refused rather than trusted.
+            if pinned?
+              raise StandardId::InvalidRequestError,
+                    "Google access-token sign-in is not available while google_hosted_domains is set"
+            end
+
             build_response(
               fetch_user_info(access_token: access_token),
               tokens: { access_token: access_token }
@@ -77,7 +116,12 @@ module StandardId
         def config_schema
           {
             google_client_id: { type: :string, default: -> { legacy_env(:google_client_id) } },
-            google_client_secret: { type: :string, default: -> { legacy_env(:google_client_secret) }, required: true }
+            google_client_secret: { type: :string, default: -> { legacy_env(:google_client_secret) }, required: true },
+            # Workspace domains sign-in is pinned to; empty (default) = not pinned.
+            google_hosted_domains: { type: :any, default: -> { [] }, env: false },
+            # StandardId::Google.staff_policy settings.
+            google_require_for_staff: { type: :boolean, default: true },
+            google_staff_predicate: { type: :any, default: nil, env: false }
           }
         end
 
@@ -111,6 +155,18 @@ module StandardId
             access_token = parsed_token["access_token"]
             raise StandardId::InvalidRequestError, "Google token response is missing access_token" if access_token.blank?
 
+            if pinned?
+              # Pinned: the ID token is required and decides identity; the
+              # userinfo only adds profile fields.
+              if parsed_token["id_token"].blank?
+                raise StandardId::InvalidRequestError, "Google token response is missing id_token"
+              end
+
+              id_claims = verify_id_token(id_token: parsed_token["id_token"], nonce: nonce)
+              user_info = pinned_user_info(fetch_user_info(access_token: access_token), id_claims)
+              return build_response(user_info, tokens: extract_tokens(parsed_token))
+            end
+
             # Web flow with a server-generated nonce: check it on the ID token.
             if parsed_token["id_token"].present? && nonce.present?
               verify_id_token(id_token: parsed_token["id_token"], nonce: nonce)
@@ -143,7 +199,10 @@ module StandardId
             # Constant-time, and the error never echoes either value.
             verify_nonce!(expected: nonce, actual: token_info["nonce"])
 
+            enforce_hosted_domain!(token_info) if pinned?
+
             {
+              "hd" => token_info["hd"],
               "sub" => token_info["sub"],
               "email" => token_info["email"],
               "email_verified" => token_info["email_verified"],
@@ -172,6 +231,39 @@ module StandardId
         end
 
         private
+
+        # Pins sign-in to the configured Workspace domains, on the claims of
+        # a verified ID token: `hd` must be one of them (an exact,
+        # case-insensitive match; consumer accounts have no `hd`), the email
+        # must be verified, and its domain must equal `hd`. Messages never
+        # echo the claims.
+        def enforce_hosted_domain!(claims)
+          hd = claims["hd"]
+          hd = hd.is_a?(String) ? hd.strip.downcase : nil
+          unless hd.present? && hosted_domains.include?(hd)
+            raise StandardId::InvalidRequestError, "Google account is not in an allowed Workspace domain"
+          end
+
+          unless [true, "true"].include?(claims["email_verified"])
+            raise StandardId::InvalidRequestError, "Google account email is not verified"
+          end
+
+          email = claims["email"]
+          local, separator, domain = email.is_a?(String) ? email.strip.rpartition("@") : []
+          unless separator == "@" && local.present? && !local.include?("@") && domain.downcase == hd
+            raise StandardId::InvalidRequestError, "Google account email is not on its Workspace domain"
+          end
+        end
+
+        # Web flow, pinned: identity comes from the verified ID token. The
+        # userinfo must agree on the subject, and its profile fields are kept.
+        def pinned_user_info(userinfo, id_claims)
+          unless userinfo.is_a?(Hash) && userinfo["sub"].to_s == id_claims["sub"].to_s && id_claims["sub"].present?
+            raise StandardId::InvalidRequestError, "Google user info does not match the ID token"
+          end
+
+          userinfo.merge(id_claims.slice("sub", "email", "email_verified", "hd"))
+        end
 
         # The client ID every flow needs, and the secret only the code
         # exchange needs (checked there). Raises when the provider is off.

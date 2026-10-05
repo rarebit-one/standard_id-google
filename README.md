@@ -52,6 +52,59 @@ end
 
 With those values in place, StandardId routes such as `/auth/callback/google` continue to function using this provider gem.
 
+### Pin sign-in to a Google Workspace domain
+
+To make Google the organisation's own identity provider, pin it to the
+Workspace domain(s) your admins control:
+
+```ruby
+StandardId.configure do |config|
+  config.social.google_hosted_domains = ["example.com"]
+end
+```
+
+With the default (empty), nothing changes. While set, every Google login (web
+and native `id_token`) is refused unless the verified ID token has an `hd`
+claim exactly matching one of the domains (case-insensitive; no subdomains),
+`email_verified` is true, and the email's domain equals `hd`. Consumer Google
+accounts have no `hd`, so they are refused. The refusal is a
+`StandardId::InvalidRequestError` raised before any account is created or
+linked. While pinned the web flow requires the ID token and takes identity from
+it, and access-token-only sign-in is refused. With exactly one domain, `hd` is
+also sent as the account-chooser hint (pass your own `hd:` to override).
+
+**Security:** pinning is enforced server-side on the verified ID token, never on
+the `hd` URL parameter, which a user can edit away. Only trust it if the
+domains' Workspace admins are the people who may create addresses on them.
+
+**Linking.** While pinned, `trusted_for_linking?` is `true` (standard_id 0.46),
+so under `link_strategy: :strict` a Workspace login may link to an existing
+account with the same verified email. Core asks per provider class, not per
+login, which is safe here because core calls it only for a login whose
+`get_user_info` has just passed the pin; unpinned it is `false`, as for any
+public IdP.
+
+**Staff policy.** To require staff to use it (standard_id 0.45+):
+
+```ruby
+StandardId.configure do |config|
+  config.login_method_policy = StandardId::Google.staff_policy(
+    staff_predicate: ->(account) { account.staff? }
+  )
+end
+```
+
+Staff may sign in only with `auth_method: :social`, provider `google`, and only
+while `google_hosted_domains` is set; password, passwordless and remember-me
+(and refreshes of those) are refused, as in the void_which_binds policy.
+Non-staff are allowed everything, or go to `fallback:`. Without a predicate
+the policy raises (fails closed); `social.google_require_for_staff = false`
+switches it off. A host running both this and
+`StandardId::VoidWhichBinds.staff_policy` should combine them with
+`StandardId::Google.any_of(google_policy, void_which_binds_policy)`: staff are
+admitted by either method and refused otherwise (chaining with `fallback:`
+would lock staff out of the other method).
+
 ### ENV fallback
 
 On `standard_id` 0.42+, a field you never assign falls back to the ENV
