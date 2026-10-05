@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Pin sign-in to Google Workspace domains: `social.google_hosted_domains`.**
+  An array of domains (default empty: nothing changes). While set, every
+  Google login, on the web code flow and the native `id_token` flow alike,
+  must present a verified ID token whose `hd` claim equals one of them
+  (case-insensitive, exact: no subdomains), with `email_verified` true and an
+  email whose domain is that `hd`. Anything else, including consumer gmail
+  (which has no `hd`), is refused with `StandardId::InvalidRequestError`
+  before any account is touched. In the web flow the ID token is required and
+  decides identity; the access-token-only sign-in is refused while pinned
+  (it has no ID token to pin on). With exactly one domain, `hd` is also sent
+  as the account-chooser hint (a caller-supplied `hd` still wins).
+  **Security note:** pinning is enforced server-side on the verified ID
+  token; the `hd` URL parameter is only a hint and proves nothing.
+- **`trusted_for_linking?` is true while pinned** (standard_id >= 0.46), so a
+  Workspace login may link to the organisation's existing account for the same
+  address under `link_strategy: :strict`. Unpinned it stays false.
+- **`StandardId::Google.staff_policy`** (standard_id >= 0.45): a
+  `login_method_policy` that lets staff in only via Google with a pinned
+  domain, mirroring `StandardId::VoidWhichBinds.staff_policy` (`staff_predicate:`,
+  `fallback:`, `social.google_require_for_staff`, `social.google_staff_predicate`).
+  `StandardId::Google.any_of(*policies)` combines it with another staff policy.
+- `verify_id_token` now also returns the `hd` claim.
+
 ## [0.6.0] - 2026-10-02
 
 Pairs with **standard_id 0.44.0** (security fix L1-01), which matches returning
