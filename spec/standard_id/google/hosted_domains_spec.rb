@@ -19,6 +19,10 @@ RSpec.describe "Google Workspace domain pinning" do
     allow(StandardId.config).to receive(:google_client_id).and_return(client_id)
     allow(StandardId.config).to receive(:google_client_secret).and_return("secret")
     allow(StandardId.config).to receive(:google_hosted_domains).and_return(domains)
+    # These specs test the enforce_hosted_domain! logic via the tokeninfo stub;
+    # use the tokeninfo path so the fake string tokens are accepted by the
+    # stub rather than rejected by JWT.decode before the domain check runs.
+    allow(StandardId.config).to receive(:google_id_token_verification).and_return("tokeninfo")
   end
 
   def stub_tokeninfo(body = claims)

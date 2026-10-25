@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-26
+
+### Changed
+
+- **`verify_id_token` now verifies Google ID tokens locally (default: `:jwks`).**
+  Signatures are checked against Google's JWKS at
+  `https://www.googleapis.com/oauth2/v3/certs`, using RS256 only. The JWKS
+  response is cached in-process (TTL 3600 s) with a kid-miss refresh subject to
+  a 60 s minimum interval, mirroring the sibling `standard_id-apple` provider.
+  The token stays within the process after the initial key fetch: no token
+  material is sent to Google.
+  Claims verified locally: algorithm (RS256 only — `alg:none` and `alg:HS256`
+  are rejected), expiry (with 60 s clock-skew leeway), issuer (`accounts.google.com`
+  or `https://accounts.google.com`), audience (configured client ID), nonce
+  (timing-safe), and `hd` when `google_hosted_domains` is set.
+- **`jwt` gem added as a runtime dependency** (`>= 2.7, < 4`). It was already a
+  transitive dependency via `standard_id-apple` in most installations.
+
+### Deprecated
+
+- **`config.google_id_token_verification = :tokeninfo`** (new opt-in).
+  The pre-0.8.0 behaviour of POSTing the raw ID token to Google's tokeninfo
+  endpoint is available for one release as an explicit opt-in. Set
+  `config.social.google_id_token_verification = :tokeninfo` to keep the old
+  path. **The `:tokeninfo` fallback will be removed in 0.9.0.**
+
+### Upgrade
+
+- No action required for apps that do not set `google_id_token_verification`.
+  The JWKS path is a drop-in replacement: the same claims are returned in the
+  same shape.
+- Apps running in network-restricted environments that block outbound HTTPS to
+  `googleapis.com` should either open that connection or set `:tokeninfo` while
+  they plan the migration.
+
 ## [0.7.0] - 2026-10-06
 
 ### Added
