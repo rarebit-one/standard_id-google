@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "openssl"
+require "jwt"
 
 RSpec.describe StandardId::Providers::Google do
   let(:google_client_id) { "google_client_123" }
@@ -9,6 +11,48 @@ RSpec.describe StandardId::Providers::Google do
   before do
     allow(StandardId.config).to receive(:google_client_id).and_return(google_client_id)
     allow(StandardId.config).to receive(:google_client_secret).and_return(google_client_secret)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Fixture RSA key pair — generated fresh for each example group that needs it.
+  # Never commit real-looking private key material.
+  # ---------------------------------------------------------------------------
+  let(:fixture_rsa_key) { OpenSSL::PKey::RSA.generate(2048) }
+  let(:fixture_kid) { "test-kid-1" }
+
+  # Build a minimal Google JWK set from the fixture key.
+  let(:fixture_jwks) do
+    jwk = JWT::JWK.new(fixture_rsa_key, { kid: fixture_kid })
+    { "keys" => [jwk.export] }
+  end
+
+  # Encode a Google-style ID token with the fixture key.
+  def encode_id_token(payload, key: fixture_rsa_key, alg: "RS256", kid: fixture_kid, header_overrides: {})
+    header = { kid: kid }.merge(header_overrides)
+    JWT.encode(payload, key, alg, header)
+  end
+
+  def valid_payload(overrides = {})
+    now = Time.now.to_i
+    {
+      "iss" => "https://accounts.google.com",
+      "aud" => google_client_id,
+      "sub" => "123456789",
+      "email" => "user@example.com",
+      "email_verified" => true,
+      "name" => "Test User",
+      "given_name" => "Test",
+      "family_name" => "User",
+      "picture" => "https://lh3.googleusercontent.com/a/default-user",
+      "locale" => "en",
+      "iat" => now,
+      "exp" => now + 3600
+    }.merge(overrides)
+  end
+
+  def stub_jwks(body: fixture_jwks)
+    stub_request(:get, described_class::JWKS_URI)
+      .to_return(status: 200, body: body.to_json, headers: { "Content-Type" => "application/json" })
   end
 
   describe "interface compliance" do
@@ -222,7 +266,11 @@ RSpec.describe StandardId::Providers::Google do
     end
 
     context "when the token response carries an id_token and a nonce was issued" do
+      # Use tokeninfo mode in the code-exchange nonce tests: these validate
+      # the nonce-checking flow, not the JWT verification mechanics.
       before do
+        allow(StandardId.config).to receive(:google_id_token_verification).and_return("tokeninfo")
+
         stub_request(:post, "https://oauth2.googleapis.com/token")
           .to_return(status: 200, body: { access_token: access_token, id_token: "web_id_token" }.to_json)
         stub_request(:post, "https://oauth2.googleapis.com/tokeninfo")
@@ -264,7 +312,215 @@ RSpec.describe StandardId::Providers::Google do
     end
   end
 
-  describe ".verify_id_token" do
+  # ---------------------------------------------------------------------------
+  # verify_id_token — JWKS mode (default, 0.8.0+)
+  # ---------------------------------------------------------------------------
+  describe ".verify_id_token (JWKS mode)" do
+    before do
+      described_class.reset_jwks_cache!
+      stub_jwks
+    end
+
+    it "verifies a valid token and returns claims" do
+      token = encode_id_token(valid_payload)
+      result = described_class.verify_id_token(id_token: token)
+
+      expect(result["sub"]).to eq("123456789")
+      expect(result["email"]).to eq("user@example.com")
+      expect(result["email_verified"]).to be(true)
+      expect(result["name"]).to eq("Test User")
+    end
+
+    it "returns all documented claims and nothing more" do
+      token = encode_id_token(valid_payload.merge("extra_claim" => "ignored"))
+      result = described_class.verify_id_token(id_token: token)
+
+      expect(result.keys).to match_array(%w[sub email email_verified name given_name family_name picture locale])
+    end
+
+    it "raises when id_token is blank" do
+      expect do
+        described_class.verify_id_token(id_token: "")
+      end.to raise_error(StandardId::InvalidRequestError, "Google id_token is missing")
+    end
+
+    it "raises when id_token is nil" do
+      expect do
+        described_class.verify_id_token(id_token: nil)
+      end.to raise_error(StandardId::InvalidRequestError, "Google id_token is missing")
+    end
+
+    it "raises on a tampered signature" do
+      token = encode_id_token(valid_payload)
+      header_b64, payload_b64, _sig = token.split(".")
+      tampered = "#{header_b64}.#{payload_b64}.invalidsignature"
+
+      expect do
+        described_class.verify_id_token(id_token: tampered)
+      end.to raise_error(StandardId::InvalidRequestError, /Invalid Google ID token/)
+    end
+
+    it "raises on wrong audience" do
+      token = encode_id_token(valid_payload("aud" => "wrong.apps.googleusercontent.com"))
+
+      expect do
+        described_class.verify_id_token(id_token: token)
+      end.to raise_error(StandardId::InvalidRequestError, "Invalid Google ID token audience")
+    end
+
+    it "does not echo the configured or presented audience in the error" do
+      token = encode_id_token(valid_payload("aud" => "attacker.apps.googleusercontent.com"))
+
+      expect do
+        described_class.verify_id_token(id_token: token)
+      end.to raise_error(StandardId::InvalidRequestError) { |e|
+        expect(e.message).not_to include(google_client_id)
+        expect(e.message).not_to include("attacker")
+      }
+    end
+
+    it "raises on wrong issuer" do
+      token = encode_id_token(valid_payload("iss" => "evil.com"))
+
+      expect do
+        described_class.verify_id_token(id_token: token)
+      end.to raise_error(StandardId::InvalidRequestError, "Invalid Google ID token issuer")
+    end
+
+    it "accepts both valid issuer forms" do
+      ["accounts.google.com", "https://accounts.google.com"].each do |iss|
+        token = encode_id_token(valid_payload("iss" => iss))
+        expect(described_class.verify_id_token(id_token: token)["sub"]).to eq("123456789")
+      end
+    end
+
+    it "raises on an expired token" do
+      token = encode_id_token(valid_payload("exp" => Time.now.to_i - 7200, "iat" => Time.now.to_i - 10800))
+
+      expect do
+        described_class.verify_id_token(id_token: token)
+      end.to raise_error(StandardId::InvalidRequestError, /Invalid Google ID token/)
+    end
+
+    it "raises when alg is 'none'" do
+      # A token signed with 'none' won't use the fixture key; the JWKS stub
+      # would still be hit (to look up the kid), but the alg check comes first.
+      header_b64 = Base64.urlsafe_encode64('{"alg":"none","kid":"test-kid-1"}', padding: false)
+      payload_b64 = Base64.urlsafe_encode64(valid_payload.to_json, padding: false)
+      none_token = "#{header_b64}.#{payload_b64}."
+
+      expect do
+        described_class.verify_id_token(id_token: none_token)
+      end.to raise_error(StandardId::InvalidRequestError, /Invalid Google ID token/)
+    end
+
+    it "raises when alg is HS256" do
+      hs256_token = JWT.encode(valid_payload, "some-secret", "HS256", { kid: fixture_kid })
+
+      expect do
+        described_class.verify_id_token(id_token: hs256_token)
+      end.to raise_error(StandardId::InvalidRequestError, /Invalid Google ID token/)
+    end
+
+    context "with an unknown kid" do
+      let(:other_rsa_key) { OpenSSL::PKey::RSA.generate(2048) }
+
+      it "raises when the kid is not found even after a refresh attempt" do
+        # Token is signed by other_rsa_key with a kid not in the JWKS.
+        # The JWKS_MIN_REFRESH_INTERVAL throttle may prevent a second network
+        # call, but the provider must raise regardless.
+        token = encode_id_token(valid_payload, key: other_rsa_key, kid: "unknown-kid-99")
+
+        expect do
+          described_class.verify_id_token(id_token: token)
+        end.to raise_error(StandardId::InvalidRequestError, /signing key not found in Google's JWKS/)
+      end
+
+      it "finds the key after a kid-miss forced refresh when the JWKS was stale" do
+        new_jwk = JWT::JWK.new(other_rsa_key, { kid: "new-kid-42" })
+        new_jwks = { "keys" => [new_jwk.export] }
+
+        # Pre-seed the cache with the old JWKS at a timestamp old enough to
+        # allow a forced refresh (> JWKS_MIN_REFRESH_INTERVAL seconds ago).
+        stale_at = Process.clock_gettime(Process::CLOCK_MONOTONIC) - (described_class::JWKS_MIN_REFRESH_INTERVAL + 10)
+        described_class.instance_variable_set(:@jwks_cache, {
+          keys: fixture_jwks["keys"],
+          fetched_at: stale_at
+        })
+
+        # First lookup uses the stale cache (no new-kid-42), then the forced
+        # refresh returns the updated JWKS with the new key.
+        stub_request(:get, described_class::JWKS_URI)
+          .to_return(status: 200, body: new_jwks.to_json)
+
+        token = encode_id_token(valid_payload, key: other_rsa_key, kid: "new-kid-42")
+        result = described_class.verify_id_token(id_token: token)
+        expect(result["sub"]).to eq("123456789")
+      end
+    end
+
+    context "nonce" do
+      let(:nonce) { "server-issued-nonce-4f1c" }
+
+      it "accepts a matching nonce" do
+        token = encode_id_token(valid_payload("nonce" => nonce))
+
+        expect(described_class.verify_id_token(id_token: token, nonce: nonce)["sub"]).to eq("123456789")
+      end
+
+      it "rejects a mismatched nonce without echoing either value" do
+        token = encode_id_token(valid_payload("nonce" => "attacker-nonce-9z"))
+
+        expect do
+          described_class.verify_id_token(id_token: token, nonce: nonce)
+        end.to raise_error(StandardId::InvalidRequestError) { |e|
+          expect(e.message).to eq("ID token nonce mismatch")
+          expect(e.message).not_to include(nonce)
+          expect(e.message).not_to include("attacker-nonce-9z")
+        }
+      end
+
+      it "rejects a token with no nonce when one was issued" do
+        token = encode_id_token(valid_payload)
+
+        expect do
+          described_class.verify_id_token(id_token: token, nonce: nonce)
+        end.to raise_error(StandardId::InvalidRequestError, "ID token nonce mismatch")
+      end
+
+      it "skips the check when no nonce was issued (native flow)" do
+        token = encode_id_token(valid_payload("nonce" => "client-side"))
+
+        expect(described_class.verify_id_token(id_token: token)["sub"]).to eq("123456789")
+      end
+    end
+
+    context "without a client ID" do
+      before { allow(StandardId.config).to receive(:google_client_id).and_return(nil) }
+
+      it "refuses" do
+        token = encode_id_token(valid_payload)
+
+        expect do
+          described_class.verify_id_token(id_token: token)
+        end.to raise_error(StandardId::InvalidRequestError, "Google OAuth is not configured")
+      end
+    end
+
+    context "without a client secret (id_token-only deployment)" do
+      before { allow(StandardId.config).to receive(:google_client_secret).and_return(nil) }
+
+      it "still verifies the id_token" do
+        token = encode_id_token(valid_payload)
+        expect(described_class.verify_id_token(id_token: token)["sub"]).to eq("123456789")
+      end
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # verify_id_token — tokeninfo fallback (opt-in, deprecated in 0.8.0)
+  # ---------------------------------------------------------------------------
+  describe ".verify_id_token (tokeninfo fallback)" do
     let(:id_token) { "valid_id_token" }
     let(:token_info) do
       {
@@ -281,6 +537,10 @@ RSpec.describe StandardId::Providers::Google do
       }
     end
 
+    before do
+      allow(StandardId.config).to receive(:google_id_token_verification).and_return("tokeninfo")
+    end
+
     it "verifies id_token and returns user info" do
       stub_request(:post, "https://oauth2.googleapis.com/tokeninfo")
         .with(body: { id_token: id_token })
@@ -293,12 +553,6 @@ RSpec.describe StandardId::Providers::Google do
       expect(result["name"]).to eq("Test User")
     end
 
-    it "raises error when id_token is blank" do
-      expect do
-        described_class.verify_id_token(id_token: "")
-      end.to raise_error(StandardId::InvalidRequestError, "Google id_token is missing")
-    end
-
     it "raises error when id_token verification fails" do
       stub_request(:post, "https://oauth2.googleapis.com/tokeninfo")
         .to_return(status: 400, body: { error: "invalid_token" }.to_json)
@@ -309,9 +563,8 @@ RSpec.describe StandardId::Providers::Google do
     end
 
     it "raises error when audience mismatches" do
-      mismatched_token_info = token_info.merge(aud: "wrong_client_id")
       stub_request(:post, "https://oauth2.googleapis.com/tokeninfo")
-        .to_return(status: 200, body: mismatched_token_info.to_json)
+        .to_return(status: 200, body: token_info.merge(aud: "wrong_client_id").to_json)
 
       expect do
         described_class.verify_id_token(id_token: id_token)
@@ -330,37 +583,22 @@ RSpec.describe StandardId::Providers::Google do
       }
     end
 
-    it "rejects a token with no audience" do
+    it "raises error when issuer is invalid" do
       stub_request(:post, "https://oauth2.googleapis.com/tokeninfo")
-        .to_return(status: 200, body: token_info.except(:aud).to_json)
+        .to_return(status: 200, body: token_info.merge(iss: "evil.com").to_json)
 
       expect do
         described_class.verify_id_token(id_token: id_token)
-      end.to raise_error(StandardId::InvalidRequestError, "Invalid Google ID token audience")
+      end.to raise_error(StandardId::InvalidRequestError, "Invalid Google ID token issuer")
     end
 
-    context "without a client secret (id_token-only deployment)" do
-      before { allow(StandardId.config).to receive(:google_client_secret).and_return(nil) }
+    it "works with https:// prefixed issuer" do
+      stub_request(:post, "https://oauth2.googleapis.com/tokeninfo")
+        .with(body: { id_token: id_token })
+        .to_return(status: 200, body: token_info.merge(iss: "https://accounts.google.com").to_json)
 
-      it "still verifies the id_token" do
-        stub_request(:post, "https://oauth2.googleapis.com/tokeninfo")
-          .with(body: { id_token: id_token })
-          .to_return(status: 200, body: token_info.to_json)
-
-        expect(described_class.get_user_info(id_token: id_token)[:user_info]["sub"]).to eq("123456789")
-      end
-    end
-
-    context "without a client ID" do
-      before { allow(StandardId.config).to receive(:google_client_id).and_return(nil) }
-
-      it "refuses" do
-        stub_request(:post, "https://oauth2.googleapis.com/tokeninfo").to_return(status: 200, body: token_info.to_json)
-
-        expect do
-          described_class.verify_id_token(id_token: id_token)
-        end.to raise_error(StandardId::InvalidRequestError, "Google OAuth is not configured")
-      end
+      result = described_class.verify_id_token(id_token: id_token)
+      expect(result["email"]).to eq("user@example.com")
     end
 
     describe "nonce" do
@@ -402,24 +640,28 @@ RSpec.describe StandardId::Providers::Google do
       end
     end
 
-    it "raises error when issuer is invalid" do
-      invalid_issuer_token_info = token_info.merge(iss: "evil.com")
-      stub_request(:post, "https://oauth2.googleapis.com/tokeninfo")
-        .to_return(status: 200, body: invalid_issuer_token_info.to_json)
+    context "without a client ID" do
+      before { allow(StandardId.config).to receive(:google_client_id).and_return(nil) }
 
-      expect do
-        described_class.verify_id_token(id_token: id_token)
-      end.to raise_error(StandardId::InvalidRequestError, "Invalid Google ID token issuer")
+      it "refuses" do
+        stub_request(:post, "https://oauth2.googleapis.com/tokeninfo").to_return(status: 200, body: token_info.to_json)
+
+        expect do
+          described_class.verify_id_token(id_token: id_token)
+        end.to raise_error(StandardId::InvalidRequestError, "Google OAuth is not configured")
+      end
     end
 
-    it "works with https:// prefixed issuer" do
-      https_issuer_token_info = token_info.merge(iss: "https://accounts.google.com")
-      stub_request(:post, "https://oauth2.googleapis.com/tokeninfo")
-        .with(body: { id_token: id_token })
-        .to_return(status: 200, body: https_issuer_token_info.to_json)
+    context "without a client secret (id_token-only deployment)" do
+      before { allow(StandardId.config).to receive(:google_client_secret).and_return(nil) }
 
-      result = described_class.verify_id_token(id_token: id_token)
-      expect(result["email"]).to eq("user@example.com")
+      it "still verifies the id_token" do
+        stub_request(:post, "https://oauth2.googleapis.com/tokeninfo")
+          .with(body: { id_token: id_token })
+          .to_return(status: 200, body: token_info.to_json)
+
+        expect(described_class.get_user_info(id_token: id_token)[:user_info]["sub"]).to eq("123456789")
+      end
     end
   end
 
@@ -541,7 +783,7 @@ RSpec.describe StandardId::Providers::Google do
       end.to raise_error(StandardId::InvalidRequestError, "Invalid Google access token audience")
     end
 
-    it "uses the same tokeninfo endpoint as ID token verification" do
+    it "uses the tokeninfo endpoint" do
       stub = stub_request(:post, described_class::TOKEN_INFO_ENDPOINT)
         .with(body: { access_token: access_token })
         .to_return(status: 200, body: token_info.to_json)
@@ -633,6 +875,13 @@ RSpec.describe StandardId::Providers::Google do
 
     it "reports nothing when disabled" do
       expect(described_class.configuration_errors).to be_empty
+    end
+
+    describe "google_id_token_verification" do
+      it "defaults to jwks" do
+        allow(StandardId.config).to receive(:google_id_token_verification).and_call_original
+        expect(StandardId.config.google_id_token_verification).to eq("jwks")
+      end
     end
 
     describe "ENV fallback" do

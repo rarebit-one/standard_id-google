@@ -1,5 +1,7 @@
 require "json"
+require "jwt"
 require "net/http"
+require "openssl"
 
 module StandardId
   module Providers
@@ -12,11 +14,23 @@ module StandardId
       # developers.google.com/identity/protocols/oauth2). The legacy
       # www.googleapis.com/oauth2/v3/tokeninfo host is no longer used.
       TOKEN_INFO_ENDPOINT = "https://oauth2.googleapis.com/tokeninfo".freeze
+      # Google's JWKS endpoint for local ID token signature verification.
+      JWKS_URI = "https://www.googleapis.com/oauth2/v3/certs".freeze
       VALID_ISSUERS = ["accounts.google.com", "https://accounts.google.com"].freeze
       DEFAULT_SCOPE = "openid email profile".freeze
       AUTHORIZATION_PARAM_DEFAULTS = {
         scope: DEFAULT_SCOPE
       }.freeze
+
+      # Google's signing keys rotate rarely; an unknown `kid` forces an early
+      # refetch (see #fetch_jwk), so a long TTL costs nothing on rotation.
+      JWKS_CACHE_TTL = 3600
+      # Floor between forced refetches, so a stream of ID tokens carrying
+      # made-up `kid`s cannot turn this process into a request amplifier
+      # against Google.
+      JWKS_MIN_REFRESH_INTERVAL = 60
+      # Accepted clock drift for exp/iat, matching the sibling Apple provider.
+      CLOCK_SKEW_SECONDS = 60
 
       # Pre-0.5.0 install generators wired the fields to these variables.
       # Still read, with a deprecation warning, when the canonical variable
@@ -26,6 +40,9 @@ module StandardId
         google_client_id: "GOOGLE_OAUTH_CLIENT_ID",
         google_client_secret: "GOOGLE_OAUTH_CLIENT_SECRET"
       }.freeze
+
+      @jwks_mutex = Mutex.new
+      @jwks_cache = nil
 
       class << self
         def provider_name
@@ -107,8 +124,8 @@ module StandardId
         # enabled provider shows the web sign-in button, and the web flow's
         # code exchange needs the secret — without it the user authenticates
         # with Google and only then does the callback fail. The native
-        # id_token and access_token flows verify through Google's tokeninfo
-        # endpoint and need only the client ID.
+        # id_token and access_token flows verify through Google's JWKS (or
+        # tokeninfo) and need only the client ID.
         #
         # ENV fallbacks (standard_id >= 0.42): GOOGLE_CLIENT_ID and
         # GOOGLE_CLIENT_SECRET; the pre-0.5.0 GOOGLE_OAUTH_* names are read as
@@ -121,7 +138,15 @@ module StandardId
             google_hosted_domains: { type: :any, default: -> { [] }, env: false },
             # StandardId::Google.staff_policy settings.
             google_require_for_staff: { type: :boolean, default: true },
-            google_staff_predicate: { type: :any, default: nil, env: false }
+            google_staff_predicate: { type: :any, default: nil, env: false },
+            # ID token verification mode:
+            #   :jwks (default) — verify the signature locally against Google's
+            #     JWKS at #{JWKS_URI}. More reliable (no network round-trip for
+            #     every auth) and keeps the token within the process.
+            #   :tokeninfo — POST the raw token to Google's tokeninfo endpoint
+            #     (legacy behaviour, pre-0.8.0). Kept for one release as an
+            #     explicit opt-in. Will be removed in 0.9.0.
+            google_id_token_verification: { type: :string, default: "jwks", env: false }
           }
         end
 
@@ -176,42 +201,27 @@ module StandardId
           end
         end
 
-        # Verifies through Google's tokeninfo endpoint, which checks the
-        # signature and expiry; the audience, issuer and nonce are checked
-        # here. Needs only the client ID.
+        # Verifies a Google ID token and returns its claims.
+        #
+        # Default mode (:jwks): verifies the signature locally against
+        # Google's JWKS, keeping the token within the process. Signature,
+        # algorithm (RS256 only), expiry, issuer and audience are all checked
+        # here; no network call is required after the keys are cached.
+        #
+        # Fallback mode (:tokeninfo): POSTs the raw token to Google's
+        # tokeninfo endpoint, which checks signature + expiry server-side;
+        # audience, issuer and nonce are checked here. Kept for one release as
+        # config.google_id_token_verification = :tokeninfo. Will be removed in
+        # 0.9.0.
         def verify_id_token(id_token:, nonce: nil)
           rescue_to_oauth_error do
             raise StandardId::InvalidRequestError, "Google id_token is missing" if id_token.blank?
 
-            response = HttpClient.post_form(TOKEN_INFO_ENDPOINT, id_token: id_token)
-            raise StandardId::InvalidRequestError, "Invalid Google ID token: invalid or expired" unless response.is_a?(Net::HTTPSuccess)
-
-            token_info = JSON.parse(response.body)
-
-            unless token_info["aud"].present? && token_info["aud"] == credentials[:client_id]
-              raise StandardId::InvalidRequestError, "Invalid Google ID token audience"
+            if tokeninfo_verification?
+              verify_id_token_via_tokeninfo(id_token: id_token, nonce: nonce)
+            else
+              verify_id_token_via_jwks(id_token: id_token, nonce: nonce)
             end
-
-            unless VALID_ISSUERS.include?(token_info["iss"])
-              raise StandardId::InvalidRequestError, "Invalid Google ID token issuer"
-            end
-
-            # Constant-time, and the error never echoes either value.
-            verify_nonce!(expected: nonce, actual: token_info["nonce"])
-
-            enforce_hosted_domain!(token_info) if pinned?
-
-            {
-              "hd" => token_info["hd"],
-              "sub" => token_info["sub"],
-              "email" => token_info["email"],
-              "email_verified" => token_info["email_verified"],
-              "name" => token_info["name"],
-              "given_name" => token_info["given_name"],
-              "family_name" => token_info["family_name"],
-              "picture" => token_info["picture"],
-              "locale" => token_info["locale"]
-            }.compact
           end
         end
 
@@ -230,7 +240,149 @@ module StandardId
           end
         end
 
+        # Drop the in-process JWKS cache (tests, or after a known rotation).
+        def reset_jwks_cache!
+          @jwks_mutex.synchronize { @jwks_cache = nil }
+        end
+
         private
+
+        # True when the host has opted into the :tokeninfo fallback.
+        def tokeninfo_verification?
+          StandardId.config.google_id_token_verification.to_s == "tokeninfo"
+        end
+
+        # Local JWKS-based verification. RS256 only. The token never leaves
+        # the process after the keys are cached.
+        def verify_id_token_via_jwks(id_token:, nonce: nil)
+          _unverified_payload, header = JWT.decode(id_token, nil, false)
+          kid = header["kid"]
+          raise StandardId::InvalidRequestError, "Invalid Google ID token: header has no kid" if kid.blank?
+
+          jwk = fetch_jwk(kid: kid)
+          creds = credentials
+
+          # RS256 is the only algorithm Google uses for ID tokens. Enforcing
+          # it here blocks alg:none and alg:HS256 attacks even if the JWKS
+          # call is somehow poisoned.
+          verified_payload, = JWT.decode(
+            id_token,
+            jwk.public_key,
+            true,
+            algorithms: ["RS256"],
+            verify_expiration: true,
+            leeway: CLOCK_SKEW_SECONDS
+          )
+
+          # Issuer and audience are checked manually for robustness across
+          # JWT gem minor versions and to keep error messages consistent.
+          unless VALID_ISSUERS.include?(verified_payload["iss"])
+            raise StandardId::InvalidRequestError, "Invalid Google ID token issuer"
+          end
+
+          # Support the multiple-client-id case: if the config carries an
+          # array, any member may match.
+          allowed = Array(creds[:client_id])
+          unless allowed.include?(verified_payload["aud"])
+            raise StandardId::InvalidRequestError, "Invalid Google ID token audience"
+          end
+
+          # Constant-time, and the error never echoes either value.
+          verify_nonce!(expected: nonce, actual: verified_payload["nonce"])
+
+          enforce_hosted_domain!(verified_payload) if pinned?
+
+          extract_id_token_claims(verified_payload)
+        rescue JWT::DecodeError => e
+          raise StandardId::InvalidRequestError, "Invalid Google ID token: #{e.message}"
+        end
+
+        # Legacy tokeninfo path. Kept as an explicit opt-in for one release.
+        # Deprecated: will be removed in 0.9.0.
+        def verify_id_token_via_tokeninfo(id_token:, nonce: nil)
+          response = HttpClient.post_form(TOKEN_INFO_ENDPOINT, id_token: id_token)
+          raise StandardId::InvalidRequestError, "Invalid Google ID token: invalid or expired" unless response.is_a?(Net::HTTPSuccess)
+
+          token_info = JSON.parse(response.body)
+
+          unless token_info["aud"].present? && token_info["aud"] == credentials[:client_id]
+            raise StandardId::InvalidRequestError, "Invalid Google ID token audience"
+          end
+
+          unless VALID_ISSUERS.include?(token_info["iss"])
+            raise StandardId::InvalidRequestError, "Invalid Google ID token issuer"
+          end
+
+          # Constant-time, and the error never echoes either value.
+          verify_nonce!(expected: nonce, actual: token_info["nonce"])
+
+          enforce_hosted_domain!(token_info) if pinned?
+
+          extract_id_token_claims(token_info)
+        end
+
+        # Pull the canonical set of ID token claims from a verified payload.
+        def extract_id_token_claims(claims)
+          {
+            "hd" => claims["hd"],
+            "sub" => claims["sub"],
+            "email" => claims["email"],
+            "email_verified" => claims["email_verified"],
+            "name" => claims["name"],
+            "given_name" => claims["given_name"],
+            "family_name" => claims["family_name"],
+            "picture" => claims["picture"],
+            "locale" => claims["locale"]
+          }.compact
+        end
+
+        # Look `kid` up in Google's JWKS, served from an in-process cache
+        # (JWKS_CACHE_TTL). An unknown `kid` refetches once — Google may have
+        # rotated — subject to JWKS_MIN_REFRESH_INTERVAL.
+        def fetch_jwk(kid:)
+          jwk_data = find_jwk(jwks_keys, kid) || find_jwk(jwks_keys(refresh: true), kid)
+          raise StandardId::InvalidRequestError, "Invalid Google ID token: signing key not found in Google's JWKS" unless jwk_data
+
+          JWT::JWK.import(jwk_data)
+        end
+
+        def find_jwk(keys, kid)
+          keys.find { |key| key["kid"] == kid }
+        end
+
+        def jwks_keys(refresh: false)
+          @jwks_mutex.synchronize do
+            now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            cache = @jwks_cache
+
+            stale = cache.nil? || now - cache[:fetched_at] > JWKS_CACHE_TTL
+            forced = refresh && cache && now - cache[:fetched_at] >= JWKS_MIN_REFRESH_INTERVAL
+            if stale || forced
+              @jwks_cache = cache = { keys: download_jwks, fetched_at: now }
+            end
+
+            cache[:keys]
+          end
+        end
+
+        # Fetched through StandardId::HttpClient's connection setup, so the
+        # request gets its timeouts and its private/internal-address guard.
+        # HttpClient has no public plain GET (only get_with_bearer, which would
+        # send an empty Authorization header), hence the two private calls.
+        def download_jwks
+          rescue_to_oauth_error("Failed to fetch Google JWKS") do
+            uri, resolved_ip = HttpClient.send(:validate_url!, JWKS_URI)
+            response = HttpClient.send(:start_connection, uri, resolved_ip: resolved_ip) do |http|
+              http.request(Net::HTTP::Get.new(uri))
+            end
+            raise StandardId::OAuthError, "Failed to fetch Google JWKS: HTTP #{response.code}" unless response.is_a?(Net::HTTPSuccess)
+
+            keys = JSON.parse(response.body)["keys"]
+            raise StandardId::OAuthError, "Failed to fetch Google JWKS: response has no keys" unless keys.is_a?(Array)
+
+            keys
+          end
+        end
 
         # Pins sign-in to the configured Workspace domains, on the claims of
         # a verified ID token: `hd` must be one of them (an exact,

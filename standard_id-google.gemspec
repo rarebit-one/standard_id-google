@@ -29,6 +29,9 @@ Gem::Specification.new do |spec|
   spec.require_paths = ["lib"]
 
   spec.add_dependency "activesupport", ">= 8.1"
+  # Used for local JWKS-based ID token signature verification (the default
+  # since 0.8.0). Matches the constraint in the sibling standard_id-apple gem.
+  spec.add_dependency "jwt", ">= 2.7", "< 4"
   # This plugin reaches into standard_id internals (StandardId::ProviderRegistry,
   # StandardId::Providers::Base helpers, StandardId::HttpClient), so its
   # compatibility with a given standard_id really does need checking rather than

@@ -1,8 +1,9 @@
 PATH
   remote: .
   specs:
-    standard_id-google (0.7.0)
+    standard_id-google (0.8.0)
       activesupport (>= 8.1)
+      jwt (>= 2.7, < 4)
       standard_id (~> 0.42)
 
 GEM
