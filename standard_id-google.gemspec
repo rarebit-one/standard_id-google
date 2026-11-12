@@ -5,7 +5,7 @@ require_relative "lib/standard_id/google/version"
 Gem::Specification.new do |spec|
   spec.name = "standard_id-google"
   spec.version = StandardId::Google::VERSION
-  spec.authors = ["Jaryl Sim"]
+  spec.authors = ["Rarebit One"]
   spec.email   = ["code@jaryl.dev"]
 
   spec.summary = "Google Sign In provider plugin for the StandardId engine."
