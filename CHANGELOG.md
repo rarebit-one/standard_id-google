@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Every request names the provider to `StandardId::HttpClient`** (`provider: :google`): the
+  code exchange, both tokeninfo calls, userinfo and the JWKS download. A standard_id that takes
+  the keyword (the release after 0.60.0) hands it to the host's `config.network_wrapper`, so a
+  circuit breaker or tracing span can tell Google's calls apart. Against older standard_id
+  releases the keyword is left out, detected from each method's parameters, so the `~> 0.42`
+  requirement is unchanged.
+
 ## [0.8.0] - 2026-10-26
 
 ### Changed
