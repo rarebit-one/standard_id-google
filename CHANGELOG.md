@@ -11,12 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **An open circuit in the host's `network_wrapper` needs no mapping here.** Every Google request
   runs inside `rescue_to_oauth_error`. On a standard_id that raises
-  `StandardId::ProviderUnavailableError` for an error the wrapper raises itself
+  `StandardId::ProviderUnavailableError` when the wrapper refuses a request itself
   (rarebit-one/standard_id#480), that error is an `OAuthError`, so it passes through unchanged,
-  and core shows "Google is temporarily unavailable" (API: 503 `temporarily_unavailable`). On
-  older releases the wrapper's error becomes a plain `OAuthError`, so sign-in fails, but never
-  with a 500. New specs pin both cases for the code, id_token (JWKS and tokeninfo) and
-  access-token flows. No code change.
+  and core shows "Google is temporarily unavailable" instead of the wrapper's own message (API:
+  503 `temporarily_unavailable` instead of 400). Before that, and for the wrapper errors core
+  passes through (programming errors, errors raised after the request went through), the
+  wrapper's error becomes a plain `OAuthError`: sign-in fails, but never with a 500. New specs pin
+  both cases for the code, id_token (JWKS and tokeninfo) and access-token flows. No code change.
 
 ## [0.9.0] - 2026-11-23
 
