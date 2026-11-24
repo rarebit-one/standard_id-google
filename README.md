@@ -114,6 +114,7 @@ variable named after it, upper-cased:
 |---|---|---|
 | `google_client_id` | `GOOGLE_CLIENT_ID` | `GOOGLE_OAUTH_CLIENT_ID` |
 | `google_client_secret` | `GOOGLE_CLIENT_SECRET` | `GOOGLE_OAUTH_CLIENT_SECRET` |
+| `google_require_for_staff` | `GOOGLE_REQUIRE_FOR_STAFF` | |
 
 So with those variables set the block above is optional. Explicit
 configuration, even `nil`, always wins. The `GOOGLE_OAUTH_*` names — what
@@ -137,6 +138,22 @@ StandardId::Providers::Google.configuration_errors
 
 config.social.provider_misconfiguration = :raise # fail a production boot instead of warning
 ```
+
+### standard_health
+
+With [standard_health](https://github.com/rarebit-one/standard_health) 0.9+ in
+the bundle, the plugin declares these variables on `/diagnostics/env` and in
+`Checks::EnvSpecAudit`, grouped under `standard_id-google`, so apps need not
+list them by hand. Without standard_health nothing happens: the gem does not
+depend on it.
+
+| Variable | Level | Applies |
+|---|---|---|
+| `GOOGLE_CLIENT_ID` | recommended | always (unset leaves the provider off) |
+| `GOOGLE_CLIENT_SECRET` | required | once the provider is on, unless the app assigns `google_client_secret` or the deprecated `GOOGLE_OAUTH_CLIENT_SECRET` supplies it |
+| `GOOGLE_REQUIRE_FOR_STAFF` | forbidden | on production, while it turns staff enforcement off |
+
+An app that declares any of them in its own `env_spec` overrides the row here.
 
 ### Flows
 
