@@ -4,6 +4,7 @@ require "standard_id"
 require "standard_id/google/version"
 require "standard_id/google/providers/google"
 require "standard_id/google/staff_policy"
+require "standard_id/google/health_contributions"
 
 # Registers the provider from a Railtie's after_initialize (a no-op outside
 # Rails). Its config fields are declared earlier, before config/initializers,

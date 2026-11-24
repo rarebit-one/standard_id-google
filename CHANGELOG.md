@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Announces its env vars to standard_health.** With standard_health 0.9+ loaded, the plugin
+  contributes its variables through standard_health's load hook, under `standard_id-google`, so
+  apps no longer declare them by hand: `GOOGLE_CLIENT_ID` (recommended; it switches the provider
+  on), `GOOGLE_CLIENT_SECRET` (required only once the provider is on and the app leaves the field
+  to ENV) and `GOOGLE_REQUIRE_FOR_STAFF` (forbidden on production while it switches
+  `staff_policy` off). Nothing is required unconditionally, and an app's own `env_spec`
+  declaration still wins. No dependency on standard_health: without it the hook never runs.
+
 ### Documentation
 
 - **An open circuit in the host's `network_wrapper` needs no mapping here.** Every Google request
