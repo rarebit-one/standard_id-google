@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-25
+
+### Added
+
+- **Announces its env vars to standard_health.** With standard_health 0.9+ loaded, the plugin
+  contributes its variables through standard_health's load hook, under `standard_id-google`, so
+  apps no longer declare them by hand: `GOOGLE_CLIENT_ID` (recommended; it switches the provider
+  on), `GOOGLE_CLIENT_SECRET` (required only once the provider is on and the app leaves the field
+  to ENV) and `GOOGLE_REQUIRE_FOR_STAFF` (forbidden on production while it switches
+  `staff_policy` off). Nothing is required unconditionally, and an app's own `env_spec`
+  declaration still wins. No dependency on standard_health: without it the hook never runs.
+
+### Documentation
+
+- **An open circuit in the host's `network_wrapper` needs no mapping here.** Every Google request
+  runs inside `rescue_to_oauth_error`. On a standard_id that raises
+  `StandardId::ProviderUnavailableError` when the wrapper refuses a request itself
+  (rarebit-one/standard_id#480), that error is an `OAuthError`, so it passes through unchanged,
+  and core shows "Google is temporarily unavailable" instead of the wrapper's own message (API:
+  503 `temporarily_unavailable` instead of 400). Before that, and for the wrapper errors core
+  passes through (programming errors, errors raised after the request went through), the
+  wrapper's error becomes a plain `OAuthError`: sign-in fails, but never with a 500. New specs pin
+  both cases for the code, id_token (JWKS and tokeninfo) and access-token flows. No code change.
+
+## [0.9.0] - 2026-11-23
+
+### Added
+
+- **Every request names the provider to `StandardId::HttpClient`** (`provider: :google`): the
+  code exchange, both tokeninfo calls, userinfo and the JWKS download. A standard_id that takes
+  the keyword (0.61.0 and later) hands it to the host's `config.network_wrapper`, so a
+  circuit breaker or tracing span can tell Google's calls apart. Against older standard_id
+  releases the keyword is left out, detected from each method's parameters, so the `~> 0.42`
+  requirement is unchanged.
+
 ## [0.8.0] - 2026-10-26
 
 ### Changed

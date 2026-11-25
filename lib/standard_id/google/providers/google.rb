@@ -169,7 +169,7 @@ module StandardId
               code: code,
               grant_type: "authorization_code",
               redirect_uri: redirect_uri
-            }.compact)
+            }.compact, **http_provider(:post_form))
 
             unless token_response.is_a?(Net::HTTPSuccess)
               raise StandardId::InvalidRequestError,
@@ -230,7 +230,7 @@ module StandardId
             raise StandardId::InvalidRequestError, "Google access token is missing" if access_token.blank?
 
             token_info = verify_token(access_token)
-            user_response = HttpClient.get_with_bearer(USERINFO_ENDPOINT, access_token)
+            user_response = HttpClient.get_with_bearer(USERINFO_ENDPOINT, access_token, **http_provider(:get_with_bearer))
 
             unless user_response.is_a?(Net::HTTPSuccess)
               raise StandardId::InvalidRequestError, "Failed to fetch Google user info: HTTP #{user_response.code}"
@@ -300,7 +300,7 @@ module StandardId
         # Legacy tokeninfo path. Kept as an explicit opt-in for one release.
         # Deprecated: will be removed in 0.9.0.
         def verify_id_token_via_tokeninfo(id_token:, nonce: nil)
-          response = HttpClient.post_form(TOKEN_INFO_ENDPOINT, id_token: id_token)
+          response = HttpClient.post_form(TOKEN_INFO_ENDPOINT, { id_token: id_token }, **http_provider(:post_form))
           raise StandardId::InvalidRequestError, "Invalid Google ID token: invalid or expired" unless response.is_a?(Net::HTTPSuccess)
 
           token_info = JSON.parse(response.body)
@@ -372,7 +372,7 @@ module StandardId
         def download_jwks
           rescue_to_oauth_error("Failed to fetch Google JWKS") do
             uri, resolved_ip = HttpClient.send(:validate_url!, JWKS_URI)
-            response = HttpClient.send(:start_connection, uri, resolved_ip: resolved_ip) do |http|
+            response = HttpClient.send(:start_connection, uri, resolved_ip: resolved_ip, **http_provider(:start_connection)) do |http|
               http.request(Net::HTTP::Get.new(uri))
             end
             raise StandardId::OAuthError, "Failed to fetch Google JWKS: HTTP #{response.code}" unless response.is_a?(Net::HTTPSuccess)
@@ -432,7 +432,7 @@ module StandardId
         # Confirms an access token was issued to this app's client before its
         # userinfo is trusted.
         def verify_token(access_token)
-          response = HttpClient.post_form(TOKEN_INFO_ENDPOINT, access_token: access_token)
+          response = HttpClient.post_form(TOKEN_INFO_ENDPOINT, { access_token: access_token }, **http_provider(:post_form))
           raise StandardId::InvalidRequestError, "Invalid Google access token: invalid or expired" unless response.is_a?(Net::HTTPSuccess)
 
           token_info = JSON.parse(response.body)
@@ -464,6 +464,18 @@ module StandardId
           end
 
           claims
+        end
+
+        # `provider: :google` for StandardId::HttpClient, which hands it to the
+        # host's `config.network_wrapper` (e.g. one circuit per provider). Only
+        # standard_id releases after 0.60.0 take the keyword, and this plugin
+        # still supports older ones, so it is passed only when the method
+        # declares it. Read on each call rather than cached: Method#parameters
+        # costs nothing next to the request itself.
+        def http_provider(method_name)
+          parameters = HttpClient.method(method_name).parameters
+          accepts = parameters.include?([:key, :provider]) || parameters.any? { |type, _| type == :keyrest }
+          accepts ? { provider: :google } : {}
         end
 
         def error_reason(response)
